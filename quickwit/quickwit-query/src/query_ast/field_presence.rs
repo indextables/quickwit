@@ -126,9 +126,6 @@ impl BuildTantivyAst for FieldPresenceQuery {
         _search_fields: &[String],
         _with_validation: bool,
     ) -> Result<TantivyQueryAst, InvalidQuery> {
-        let field_presence_field = schema.get_field(FIELD_PRESENCE_FIELD_NAME).map_err(|_| {
-            InvalidQuery::SchemaError("field presence is not available for this split".to_string())
-        })?;
         let fields = self.find_field_and_subfields(schema);
         if fields.is_empty() {
             // the schema is not dynamic and no subfields are defined
@@ -136,6 +133,35 @@ impl BuildTantivyAst for FieldPresenceQuery {
                 full_path: self.field.clone(),
             });
         }
+
+        // Check if all fields are fast - if so, we can use Tantivy's native ExistsQuery
+        // without needing the _field_presence field
+        let all_fields_are_fast = fields.iter().all(|(_, entry, _)| entry.is_fast());
+
+        if all_fields_are_fast {
+            // All fields are fast, use Tantivy's native ExistsQuery directly
+            let queries: Vec<TantivyQueryAst> = fields
+                .into_iter()
+                .map(|(_, entry, path)| {
+                    let full_path = if path.is_empty() {
+                        entry.name().to_string()
+                    } else {
+                        format!("{}.{}", entry.name(), path)
+                    };
+                    let exists_query = tantivy::query::ExistsQuery::new(full_path, true);
+                    TantivyQueryAst::from(exists_query)
+                })
+                .collect();
+            return Ok(TantivyQueryAst::Bool(TantivyBoolQuery::build_clause(
+                BooleanOperand::Or,
+                queries,
+            )));
+        }
+
+        // Some fields are not fast, need _field_presence field for fallback
+        let field_presence_field = schema.get_field(FIELD_PRESENCE_FIELD_NAME).map_err(|_| {
+            InvalidQuery::SchemaError("field presence is not available for this split".to_string())
+        })?;
         let queries = fields
             .into_iter()
             .map(|(field, entry, path)| {
