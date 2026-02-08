@@ -166,6 +166,127 @@ pub async fn open_index_with_caches(
     tokenizer_manager: Option<&TokenizerManager>,
     ephemeral_unbounded_cache: Option<ByteRangeCache>,
 ) -> anyhow::Result<(Index, HotDirectory)> {
+    open_index_with_caches_and_schema_override(
+        searcher_context,
+        index_storage,
+        split_and_footer_offsets,
+        tokenizer_manager,
+        ephemeral_unbounded_cache,
+        None,
+    )
+    .await
+}
+
+/// Simple in-memory directory overlay for injecting file overrides.
+///
+/// Serves `meta.json` via `atomic_read` and `.fast` file data via `get_file_handle`.
+/// All write operations are no-ops. Used with UnionDirectory to shadow files in
+/// the underlying HotDirectory.
+#[derive(Clone)]
+struct OverlayDirectory {
+    meta_json: Option<Vec<u8>>,
+    file_overrides: HashMap<PathBuf, Vec<u8>>,
+}
+
+impl std::fmt::Debug for OverlayDirectory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OverlayDirectory")
+            .field("meta_json", &self.meta_json.as_ref().map(|b| b.len()))
+            .field("file_overrides_count", &self.file_overrides.len())
+            .finish()
+    }
+}
+
+impl tantivy::directory::Directory for OverlayDirectory {
+    fn get_file_handle(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<Arc<dyn tantivy::directory::FileHandle>, tantivy::directory::error::OpenReadError> {
+        if let Some(data) = self.file_overrides.get(path) {
+            debug_println!("📊 OVERLAY: HIT for {:?} ({} bytes)", path, data.len());
+            Ok(Arc::new(OwnedBytes::new(data.clone())))
+        } else {
+            Err(tantivy::directory::error::OpenReadError::FileDoesNotExist(path.to_path_buf()))
+        }
+    }
+
+    fn exists(&self, path: &std::path::Path) -> Result<bool, tantivy::directory::error::OpenReadError> {
+        if path == std::path::Path::new("meta.json") && self.meta_json.is_some() {
+            return Ok(true);
+        }
+        Ok(self.file_overrides.contains_key(path))
+    }
+
+    fn atomic_read(&self, path: &std::path::Path) -> Result<Vec<u8>, tantivy::directory::error::OpenReadError> {
+        if path == std::path::Path::new("meta.json") {
+            if let Some(meta) = &self.meta_json {
+                return Ok(meta.clone());
+            }
+        }
+        Err(tantivy::directory::error::OpenReadError::FileDoesNotExist(path.to_path_buf()))
+    }
+
+    fn atomic_write(&self, _path: &std::path::Path, _data: &[u8]) -> std::io::Result<()> {
+        Ok(()) // no-op
+    }
+
+    fn delete(&self, _path: &std::path::Path) -> Result<(), tantivy::directory::error::DeleteError> {
+        Ok(()) // no-op
+    }
+
+    fn open_write(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<tantivy::directory::WritePtr, tantivy::directory::error::OpenWriteError> {
+        Err(tantivy::directory::error::OpenWriteError::FileAlreadyExists(path.to_path_buf()))
+    }
+
+    fn watch(&self, _watch_callback: tantivy::directory::WatchCallback) -> tantivy::Result<tantivy::directory::WatchHandle> {
+        Ok(tantivy::directory::WatchHandle::empty())
+    }
+
+    fn sync_directory(&self) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    fn acquire_lock(
+        &self,
+        _lock: &tantivy::directory::Lock,
+    ) -> Result<tantivy::directory::DirectoryLock, tantivy::directory::error::LockError> {
+        // Read-only directory: return no-op lock (same pattern as HotDirectory)
+        Ok(tantivy::directory::DirectoryLock::from(Box::new(|| {})))
+    }
+}
+
+/// Overrides for the split's on-disk data used by parquet companion mode.
+///
+/// When parquet companion mode suppresses `.fast` data during indexing, the
+/// aggregation code path needs two kinds of overrides:
+/// 1. A modified meta.json that marks all fields as fast (so tantivy's
+///    FastFieldReaders doesn't reject them)
+/// 2. Transcoded `.fast` file bytes containing the actual columnar data
+///    (decoded from parquet files)
+pub struct SplitOverrides {
+    /// Modified meta.json bytes with all fields promoted to fast.
+    pub meta_json: Vec<u8>,
+    /// Pre-transcoded fast field file data. Keys are segment-relative paths
+    /// (e.g. "abc123.fast"), values are the complete columnar bytes.
+    pub fast_field_data: HashMap<PathBuf, Vec<u8>>,
+}
+
+/// Open a split index with caches and optional split overrides.
+///
+/// When `overrides` is provided, a shadow RamDirectory is used to overlay
+/// the modified meta.json and any pre-transcoded fast field data on top of
+/// the split's HotDirectory. This is used by parquet companion mode.
+pub async fn open_index_with_caches_and_schema_override(
+    searcher_context: &SearcherContext,
+    index_storage: Arc<dyn Storage>,
+    split_and_footer_offsets: &SplitIdAndFooterOffsets,
+    tokenizer_manager: Option<&TokenizerManager>,
+    ephemeral_unbounded_cache: Option<ByteRangeCache>,
+    overrides: Option<SplitOverrides>,
+) -> anyhow::Result<(Index, HotDirectory)> {
 
     let index_storage_with_retry_on_timeout =
         configure_storage_retries(searcher_context, index_storage);
@@ -191,7 +312,21 @@ pub async fn open_index_with_caches(
         HotDirectory::open(directory, hotcache_bytes.read_bytes()?)?
     };
 
-    let mut index = Index::open(hot_directory.clone())?;
+    // If overrides are provided, shadow the original files via UnionDirectory
+    let mut index = if let Some(split_overrides) = overrides {
+        let overlay = OverlayDirectory {
+            meta_json: Some(split_overrides.meta_json),
+            file_overrides: split_overrides.fast_field_data,
+        };
+
+        let union_dir = quickwit_directories::UnionDirectory::union_of(vec![
+            Box::new(overlay),
+            Box::new(hot_directory.clone()),
+        ]);
+        Index::open(union_dir)?
+    } else {
+        Index::open(hot_directory.clone())?
+    };
 
     if let Some(tokenizer_manager) = tokenizer_manager {
         index.set_tokenizers(tokenizer_manager.tantivy_manager().clone());
@@ -459,6 +594,7 @@ pub async fn leaf_search_single_split(
     split_filter: Arc<RwLock<CanSplitDoBetter>>,
     aggregations_limits: AggregationLimitsGuard,
     search_permit: &mut SearchPermit,
+    overrides: Option<SplitOverrides>,
 ) -> crate::Result<LeafSearchResponse> {
     rewrite_request(
         &mut search_request,
@@ -486,12 +622,13 @@ pub async fn leaf_search_single_split(
     let split_id = split.split_id.to_string();
     let byte_range_cache =
         ByteRangeCache::with_infinite_capacity(&quickwit_storage::STORAGE_METRICS.shortlived_cache);
-    let (index, hot_directory) = open_index_with_caches(
+    let (index, hot_directory) = open_index_with_caches_and_schema_override(
         searcher_context,
         storage,
         &split,
         Some(doc_mapper.tokenizer_manager()),
         Some(byte_range_cache.clone()),
+        overrides,
     )
     .await?;
 
@@ -1482,6 +1619,7 @@ async fn leaf_search_single_split_wrapper(
         split_filter.clone(),
         aggregations_limits,
         &mut search_permit,
+        None,
     )
     .await;
 

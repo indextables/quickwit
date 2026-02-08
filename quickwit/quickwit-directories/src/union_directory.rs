@@ -120,6 +120,15 @@ impl Directory for UnionDirectory {
     fn sync_directory(&self) -> io::Result<()> {
         self.directories[0].sync_directory()
     }
+
+    fn acquire_lock(
+        &self,
+        _lock: &tantivy::directory::Lock,
+    ) -> Result<tantivy::directory::DirectoryLock, tantivy::directory::error::LockError> {
+        // Delegate to first directory for lock acquisition.
+        // Read-only directories (like OverlayDirectory, HotDirectory) return no-op locks.
+        self.directories[0].acquire_lock(_lock)
+    }
 }
 
 #[cfg(test)]
