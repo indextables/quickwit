@@ -185,7 +185,7 @@ pub async fn open_index_with_caches(
 #[derive(Clone)]
 struct OverlayDirectory {
     meta_json: Option<Vec<u8>>,
-    file_overrides: HashMap<PathBuf, Vec<u8>>,
+    file_overrides: HashMap<PathBuf, OwnedBytes>,
 }
 
 impl std::fmt::Debug for OverlayDirectory {
@@ -204,7 +204,7 @@ impl tantivy::directory::Directory for OverlayDirectory {
     ) -> Result<Arc<dyn tantivy::directory::FileHandle>, tantivy::directory::error::OpenReadError> {
         if let Some(data) = self.file_overrides.get(path) {
             debug_println!("📊 OVERLAY: HIT for {:?} ({} bytes)", path, data.len());
-            Ok(Arc::new(OwnedBytes::new(data.clone())))
+            Ok(Arc::new(data.clone()))
         } else {
             Err(tantivy::directory::error::OpenReadError::FileDoesNotExist(path.to_path_buf()))
         }
@@ -271,7 +271,8 @@ pub struct SplitOverrides {
     pub meta_json: Vec<u8>,
     /// Pre-transcoded fast field file data. Keys are segment-relative paths
     /// (e.g. "abc123.fast"), values are the complete columnar bytes.
-    pub fast_field_data: HashMap<PathBuf, Vec<u8>>,
+    /// Uses OwnedBytes for zero-copy sharing from the transcoded_cache.
+    pub fast_field_data: HashMap<PathBuf, OwnedBytes>,
 }
 
 /// Open a split index with caches and optional split overrides.
