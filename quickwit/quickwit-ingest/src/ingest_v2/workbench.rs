@@ -19,14 +19,12 @@ use quickwit_common::rate_limited_error;
 use quickwit_proto::control_plane::{
     GetOrCreateOpenShardsFailure, GetOrCreateOpenShardsFailureReason,
 };
-use quickwit_proto::ingest::ingester::{
-    PersistFailure, PersistFailureReason, PersistRequest, PersistSuccess,
-};
+use quickwit_proto::ingest::ingester::{PersistFailure, PersistFailureReason, PersistSuccess};
 use quickwit_proto::ingest::router::{
     IngestFailure, IngestFailureReason, IngestResponseV2, IngestSubrequest, IngestSuccess,
 };
-use quickwit_proto::ingest::{IngestV2Error, RateLimitingCause};
-use quickwit_proto::types::{NodeId, ShardId, SubrequestId};
+use quickwit_proto::ingest::{IngestV2Error, RateLimitingCause, ShardIds};
+use quickwit_proto::types::{NodeId, SubrequestId};
 use tracing::warn;
 
 use super::publish_tracker::PublishTracker;
@@ -37,7 +35,6 @@ use super::router::PersistRequestSummary;
 #[derive(Default)]
 pub(super) struct IngestWorkbench {
     pub subworkbenches: BTreeMap<SubrequestId, IngestSubworkbench>,
-    pub rate_limited_shards: HashSet<ShardId>,
     pub num_successes: usize,
     /// The number of batch persist attempts. This is not sum of the number of attempts for each
     /// subrequest.
@@ -50,6 +47,7 @@ pub(super) struct IngestWorkbench {
     /// (The point here is to make sure we do not wait for the failure detection to kick the node
     /// out of the ingest node.)
     pub unavailable_leaders: HashSet<NodeId>,
+    pub closed_shards: Vec<ShardIds>,
     publish_tracker: Option<PublishTracker>,
 }
 
@@ -128,16 +126,6 @@ impl IngestWorkbench {
             .all(|subworbench| !subworbench.is_pending())
     }
 
-    pub fn record_persist_request(&self, persist_request: &PersistRequest) {
-        if let Some(publish_tracker) = &self.publish_tracker {
-            let shards = persist_request
-                .subrequests
-                .iter()
-                .map(|subrequest| subrequest.shard_id());
-            publish_tracker.register_requested_shards(shards);
-        }
-    }
-
     pub fn record_get_or_create_open_shards_failure(
         &mut self,
         open_shards_failure: GetOrCreateOpenShardsFailure,
@@ -169,13 +157,13 @@ impl IngestWorkbench {
             );
             return;
         };
-        if let Some(publish_tracker) = &mut self.publish_tracker {
-            if let Some(position) = &persist_success.replication_position_inclusive {
-                publish_tracker.track_persisted_shard_position(
-                    persist_success.shard_id().clone(),
-                    position.clone(),
-                );
-            }
+        if let Some(publish_tracker) = &mut self.publish_tracker
+            && let Some(position) = &persist_success.replication_position_inclusive
+        {
+            publish_tracker.track_persisted_shard_position(
+                persist_success.shard_id().clone(),
+                position.clone(),
+            );
         }
         self.num_successes += 1;
         subworkbench.num_attempts += 1;
@@ -238,13 +226,6 @@ impl IngestWorkbench {
 
     pub fn record_no_shards_available(&mut self, subrequest_id: SubrequestId) {
         self.record_failure(subrequest_id, SubworkbenchFailure::NoShardsAvailable);
-    }
-
-    pub fn record_rate_limited(&mut self, subrequest_id: SubrequestId) {
-        self.record_failure(
-            subrequest_id,
-            SubworkbenchFailure::RateLimited(RateLimitingCause::ShardRateLimiting),
-        );
     }
 
     /// Marks a node as unavailable for the span of the workbench.
@@ -411,7 +392,7 @@ mod tests {
     use std::time::Duration;
 
     use quickwit_proto::indexing::ShardPositionsUpdate;
-    use quickwit_proto::ingest::ingester::{PersistFailureReason, PersistSubrequest};
+    use quickwit_proto::ingest::ingester::PersistFailureReason;
     use quickwit_proto::types::{IndexUid, Position, ShardId, SourceUid};
 
     use super::*;
@@ -445,7 +426,7 @@ mod tests {
         assert!(!subworkbench.last_failure_is_transient());
 
         subworkbench.last_failure_opt = Some(SubworkbenchFailure::Persist(
-            PersistFailureReason::ShardRateLimited,
+            PersistFailureReason::NoShardsAvailable,
         ));
         assert!(subworkbench.is_pending());
         assert!(subworkbench.last_failure_is_transient());
@@ -569,23 +550,6 @@ mod tests {
         assert_eq!(pending_subrequests(&workbench.subworkbenches).count(), 2);
         assert!(!workbench.is_complete());
 
-        let persist_request = PersistRequest {
-            subrequests: vec![
-                PersistSubrequest {
-                    subrequest_id: 0,
-                    shard_id: Some(shard_id_1.clone()),
-                    ..Default::default()
-                },
-                PersistSubrequest {
-                    subrequest_id: 1,
-                    shard_id: Some(shard_id_2.clone()),
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        };
-        workbench.record_persist_request(&persist_request);
-
         let persist_success = PersistSuccess {
             subrequest_id: 0,
             shard_id: Some(shard_id_1.clone()),
@@ -596,7 +560,6 @@ mod tests {
 
         let persist_failure = PersistFailure {
             subrequest_id: 1,
-            shard_id: Some(shard_id_2.clone()),
             ..Default::default()
         };
         workbench.record_persist_failure(&persist_failure);
@@ -607,18 +570,6 @@ mod tests {
             replication_position_inclusive: Some(Position::offset(66usize)),
             ..Default::default()
         };
-
-        // retry to persist shard 2
-
-        let persist_request = PersistRequest {
-            subrequests: vec![PersistSubrequest {
-                subrequest_id: 1,
-                shard_id: Some(shard_id_2.clone()),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        workbench.record_persist_request(&persist_request);
 
         workbench.record_persist_success(persist_success);
 
@@ -661,23 +612,6 @@ mod tests {
         ];
         let mut workbench =
             IngestWorkbench::new_with_publish_tracking(ingest_subrequests, 1, event_broker.clone());
-
-        let persist_request = PersistRequest {
-            subrequests: vec![
-                PersistSubrequest {
-                    subrequest_id: 0,
-                    shard_id: Some(shard_id_1.clone()),
-                    ..Default::default()
-                },
-                PersistSubrequest {
-                    subrequest_id: 1,
-                    shard_id: Some(shard_id_2.clone()),
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        };
-        workbench.record_persist_request(&persist_request);
 
         let persist_success = PersistSuccess {
             subrequest_id: 0,
@@ -865,14 +799,13 @@ mod tests {
 
         let persist_failure = PersistFailure {
             subrequest_id: 42,
-            reason: PersistFailureReason::ShardRateLimited as i32,
+            reason: PersistFailureReason::NoShardsAvailable as i32,
             ..Default::default()
         };
         workbench.record_persist_failure(&persist_failure);
 
         let persist_failure = PersistFailure {
             subrequest_id: 0,
-            shard_id: Some(ShardId::from(1)),
             reason: PersistFailureReason::WalFull as i32,
             ..Default::default()
         };

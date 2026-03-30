@@ -28,7 +28,6 @@ use quickwit_common::uri::Uri;
 use serde::{Deserialize, Serialize};
 use tantivy::HasLen;
 use tantivy::directory::FileSlice;
-use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWriteExt};
 use tracing::error;
 
@@ -99,14 +98,6 @@ impl BundleStorage {
     pub fn iter_files(&self) -> impl Iterator<Item = &PathBuf> {
         self.metadata.files.keys()
     }
-}
-
-#[derive(Debug, Error)]
-#[error("corrupted data. error: {error:?}")]
-pub struct CorruptedData {
-    #[from]
-    #[source]
-    pub error: serde_json::Error,
 }
 
 const SPLIT_HOTBYTES_FOOTER_LENGTH_NUM_BYTES: usize = std::mem::size_of::<u32>();

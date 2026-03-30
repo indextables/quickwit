@@ -14,6 +14,7 @@
 
 #![allow(clippy::derive_partial_eq_without_eq)]
 #![allow(clippy::disallowed_methods)]
+#![allow(clippy::doc_lazy_continuation)]
 #![allow(rustdoc::invalid_html_tags)]
 
 use std::cmp::Ordering;
@@ -27,7 +28,8 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 pub mod cluster;
 pub mod control_plane;
-pub use {bytes, tonic};
+pub use bytes;
+pub use tonic;
 pub mod developer;
 pub mod error;
 mod getters;
@@ -48,6 +50,9 @@ pub mod jaeger {
         pub mod v1 {
             include!("codegen/jaeger/jaeger.storage.v1.rs");
         }
+        pub mod v2 {
+            include!("codegen/jaeger/jaeger.storage.v2.rs");
+        }
     }
 }
 
@@ -61,12 +66,11 @@ pub mod opentelemetry {
                     include!("codegen/opentelemetry/opentelemetry.proto.collector.logs.v1.rs");
                 }
             }
-            // One can dream.
-            // pub mod metrics {
-            //     pub mod v1 {
-            //         include!("codegen/opentelemetry/opentelemetry.proto.collector.metrics.v1.rs"
-            // );     }
-            // }
+            pub mod metrics {
+                pub mod v1 {
+                    include!("codegen/opentelemetry/opentelemetry.proto.collector.metrics.v1.rs");
+                }
+            }
             pub mod trace {
                 pub mod v1 {
                     include!("codegen/opentelemetry/opentelemetry.proto.collector.trace.v1.rs");
@@ -83,14 +87,11 @@ pub mod opentelemetry {
                 include!("codegen/opentelemetry/opentelemetry.proto.logs.v1.rs");
             }
         }
-        // pub mod metrics {
-        //     pub mod experimental {
-        //         include!("codegen/opentelemetry/opentelemetry.proto.metrics.experimental.rs");
-        //     }
-        //     pub mod v1 {
-        //         tonic::include_proto!("codegen/opentelemetry/opentelemetry.proto.metrics.v1");
-        //     }
-        // }
+        pub mod metrics {
+            pub mod v1 {
+                include!("codegen/opentelemetry/opentelemetry.proto.metrics.v1.rs");
+            }
+        }
         pub mod resource {
             pub mod v1 {
                 include!("codegen/opentelemetry/opentelemetry.proto.resource.v1.rs");
@@ -101,21 +102,6 @@ pub mod opentelemetry {
                 include!("codegen/opentelemetry/opentelemetry.proto.trace.v1.rs");
             }
         }
-    }
-}
-
-impl TryFrom<search::SearchStreamRequest> for search::SearchRequest {
-    type Error = anyhow::Error;
-
-    fn try_from(search_stream_req: search::SearchStreamRequest) -> Result<Self, Self::Error> {
-        Ok(Self {
-            index_id_patterns: vec![search_stream_req.index_id],
-            query_ast: search_stream_req.query_ast,
-            snippet_fields: search_stream_req.snippet_fields,
-            start_timestamp: search_stream_req.start_timestamp,
-            end_timestamp: search_stream_req.end_timestamp,
-            ..Default::default()
-        })
     }
 }
 
@@ -139,10 +125,10 @@ pub struct MutMetadataMap<'a>(&'a mut tonic::metadata::MetadataMap);
 impl Injector for MutMetadataMap<'_> {
     /// Sets a key-value pair in the [`MetadataMap`]. No-op if the key or value is invalid.
     fn set(&mut self, key: &str, value: String) {
-        if let Ok(metadata_key) = tonic::metadata::MetadataKey::from_bytes(key.as_bytes()) {
-            if let Ok(metadata_value) = tonic::metadata::MetadataValue::try_from(&value) {
-                self.0.insert(metadata_key, metadata_value);
-            }
+        if let Ok(metadata_key) = tonic::metadata::MetadataKey::from_bytes(key.as_bytes())
+            && let Ok(metadata_value) = tonic::metadata::MetadataValue::try_from(&value)
+        {
+            self.0.insert(metadata_key, metadata_value);
         }
     }
 }
@@ -210,7 +196,7 @@ impl Extractor for MetadataMap<'_> {
 pub fn set_parent_span_from_request_metadata(request_metadata: &tonic::metadata::MetadataMap) {
     let parent_cx =
         global::get_text_map_propagator(|prop| prop.extract(&MetadataMap(request_metadata)));
-    Span::current().set_parent(parent_cx);
+    let _ = Span::current().set_parent(parent_cx);
 }
 
 impl search::SortOrder {

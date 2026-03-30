@@ -25,7 +25,7 @@ use crate::rest::recover_fn;
 
 /// Regular expression to identify which path should serve an asset file.
 /// If not matched, the server serves the `index.html` file.
-const PATH_PATTERN: &str = r"(^static|\.(png|json|txt|ico|js|map)$)";
+const PATH_PATTERN: &str = r"(^static|\.(png|json|txt|ico|js|map|css|woff2|ttf)$)";
 
 const UI_INDEX_FILE_NAME: &str = "index.html";
 
@@ -60,7 +60,7 @@ async fn serve_impl(path: &str) -> Result<impl warp::Reply + use<>, Rejection> {
     let asset = Asset::get(path_to_file).ok_or_else(warp::reject::not_found)?;
     let mime = mime_guess::from_path(path_to_file).first_or_octet_stream();
 
-    let mut res = Response::new(asset.data.into());
+    let mut res = Response::new(asset.data.into_owned().into());
     res.headers_mut().insert(
         "content-type",
         HeaderValue::from_str(mime.as_ref()).unwrap(),

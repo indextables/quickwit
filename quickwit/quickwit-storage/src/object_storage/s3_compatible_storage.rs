@@ -57,7 +57,8 @@ use crate::{
 /// Semaphore to limit the number of concurrent requests to the object store. Some object stores
 /// (R2, SeaweedFs...) return errors when too many concurrent requests are emitted.
 static REQUEST_SEMAPHORE: Lazy<Semaphore> = Lazy::new(|| {
-    let num_permits: usize = quickwit_common::get_from_env("QW_S3_MAX_CONCURRENCY", 10_000usize);
+    let num_permits: usize =
+        quickwit_common::get_from_env("QW_S3_MAX_CONCURRENCY", 10_000usize, false);
     Semaphore::new(num_permits)
 });
 
@@ -314,7 +315,7 @@ async fn compute_md5<T: AsyncRead + std::marker::Unpin>(mut read: T) -> io::Resu
         let read_len = read.read(&mut buf).await?;
         checksum.consume(&buf[..read_len]);
         if read_len == 0 {
-            return Ok(checksum.compute());
+            return Ok(checksum.finalize());
         }
     }
 }

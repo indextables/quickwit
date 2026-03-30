@@ -2,6 +2,7 @@ version = "0.7"
 
 cluster_id = "quickwit-cluster"
 node_id = "my-unique-node-id"
+availability_zone = "az-1"
 enabled_services = [ "janitor", "metastore" ]
 listen_address = "0.0.0.0"
 advertise_address = "172.0.0.12"
@@ -60,6 +61,16 @@ max_num_concurrent_split_searches = 150
 min_throughtput_bytes_per_secs = 100000
 timeout_millis = 2000
 max_num_retries = 2
+
+[searcher.lambda]
+function_name = "quickwit-lambda-leaf-search"
+max_splits_per_invocation = 10
+offload_threshold = 30
+
+[searcher.lambda.auto_deploy]
+execution_role_arn = "arn:aws:iam::123456789012:role/quickwit-lambda-role"
+memory_size = "5 GiB"
+invocation_timeout_secs = 15
 
 [jaeger]
 enable_endpoint = true

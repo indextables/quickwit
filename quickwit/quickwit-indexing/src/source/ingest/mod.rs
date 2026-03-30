@@ -49,7 +49,7 @@ use super::{
     BATCH_NUM_BYTES_LIMIT, BatchBuilder, EMIT_BATCHES_TIMEOUT, Source, SourceContext,
     SourceRuntime, TypedSourceFactory,
 };
-use crate::actors::DocProcessor;
+use crate::actors::Processor;
 use crate::models::{LocalShardPositionsUpdate, NewPublishLock, NewPublishToken, PublishLock};
 
 pub struct IngestSourceFactory;
@@ -302,10 +302,10 @@ impl IngestSource {
         );
         // Let's record all shards that have reached Eof as complete.
         for (shard, truncate_up_to_position_inclusive) in &truncate_up_to_positions {
-            if truncate_up_to_position_inclusive.is_eof() {
-                if let Some(assigned_shard) = self.assigned_shards.get_mut(shard) {
-                    assigned_shard.status = IndexingStatus::Complete;
-                }
+            if truncate_up_to_position_inclusive.is_eof()
+                && let Some(assigned_shard) = self.assigned_shards.get_mut(shard)
+            {
+                assigned_shard.status = IndexingStatus::Complete;
             }
         }
 
@@ -361,6 +361,7 @@ impl IngestSource {
                 };
                 for num_attempts in 1..=retry_params.max_attempts {
                     let Err(error) = ingester
+                        .client
                         .truncate_shards(truncate_shards_request.clone())
                         .await
                     else {
@@ -390,11 +391,11 @@ impl IngestSource {
     /// After this method has returned we are guaranteed to have the following post condition:
     /// - a alive publish lock / non-empty publish token
     /// - all currently assigned shards included in the `new_assigned_shard_ids` set.
-    async fn reset_if_needed(
+    async fn reset_if_needed<Q: crate::actors::Processor>(
         &mut self,
         new_assigned_shard_ids: &BTreeSet<ShardId>,
-        doc_processor_mailbox: &Mailbox<DocProcessor>,
-        ctx: &SourceContext,
+        doc_processor_mailbox: &Mailbox<Q>,
+        ctx: &crate::source::SourceContext<Q>,
     ) -> anyhow::Result<()> {
         // No need to do anything if the list of shards before and after are empty.
         if new_assigned_shard_ids.is_empty() && self.assigned_shards.is_empty() {
@@ -410,9 +411,8 @@ impl IngestSource {
                 .assigned_shards
                 .keys()
                 .filter(|&shard_id| !new_assigned_shard_ids.contains(shard_id))
-                .cloned()
                 .any(|removed_shard_id| {
-                    let Some(assigned_shard) = self.assigned_shards.get(&removed_shard_id) else {
+                    let Some(assigned_shard) = self.assigned_shards.get(removed_shard_id) else {
                         return false;
                     };
                     assigned_shard.status != IndexingStatus::Complete
@@ -456,11 +456,11 @@ impl IngestSource {
 }
 
 #[async_trait]
-impl Source for IngestSource {
+impl<P: Processor> Source<P> for IngestSource {
     async fn emit_batches(
         &mut self,
-        doc_processor_mailbox: &Mailbox<DocProcessor>,
-        ctx: &SourceContext,
+        processor_mailbox: &Mailbox<P>,
+        ctx: &SourceContext<P>,
     ) -> Result<Duration, ActorExitStatus> {
         let mut batch_builder = BatchBuilder::new(SourceType::IngestV2);
 
@@ -502,7 +502,7 @@ impl Source for IngestSource {
                 "Sending doc batch to indexer."
             );
             let message = batch_builder.build();
-            ctx.send_message(doc_processor_mailbox, message).await?;
+            ctx.send_message(processor_mailbox, message).await?;
         }
         Ok(Duration::default())
     }
@@ -510,10 +510,10 @@ impl Source for IngestSource {
     async fn assign_shards(
         &mut self,
         new_assigned_shard_ids: BTreeSet<ShardId>,
-        doc_processor_mailbox: &Mailbox<DocProcessor>,
-        ctx: &SourceContext,
+        processor_mailbox: &Mailbox<P>,
+        ctx: &SourceContext<P>,
     ) -> anyhow::Result<()> {
-        self.reset_if_needed(&new_assigned_shard_ids, doc_processor_mailbox, ctx)
+        self.reset_if_needed(&new_assigned_shard_ids, processor_mailbox, ctx)
             .await?;
 
         // As enforced by `reset_if_needed`, at this point, all currently assigned shards should be
@@ -621,7 +621,7 @@ impl Source for IngestSource {
     async fn suggest_truncate(
         &mut self,
         checkpoint: SourceCheckpoint,
-        _ctx: &SourceContext,
+        _ctx: &SourceContext<P>,
     ) -> anyhow::Result<()> {
         let truncate_up_to_positions: Vec<(ShardId, Position)> = checkpoint
             .iter()
@@ -673,6 +673,7 @@ mod tests {
     use quickwit_common::metrics::MEMORY_METRICS;
     use quickwit_common::stream_utils::InFlightValue;
     use quickwit_config::{IndexingSettings, SourceConfig, SourceParams};
+    use quickwit_ingest::IngesterPoolEntry;
     use quickwit_proto::indexing::IndexingPipelineId;
     use quickwit_proto::ingest::ingester::{
         FetchMessage, IngesterServiceClient, MockIngesterService, TruncateShardsResponse,
@@ -685,6 +686,7 @@ mod tests {
     use tokio::sync::watch;
 
     use super::*;
+    use crate::actors::DocProcessor;
     use crate::models::RawDocBatch;
     use crate::source::SourceActor;
 
@@ -930,7 +932,8 @@ mod tests {
                 Ok(response)
             });
 
-        let ingester_0 = IngesterServiceClient::from_mock(mock_ingester_0);
+        let ingester_0 =
+            IngesterPoolEntry::ready_with_client(IngesterServiceClient::from_mock(mock_ingester_0));
         ingester_pool.insert("test-ingester-0".into(), ingester_0.clone());
 
         let event_broker = EventBroker::default();
@@ -1127,7 +1130,8 @@ mod tests {
                 Ok(response)
             });
 
-        let ingester_0 = IngesterServiceClient::from_mock(mock_ingester_0);
+        let ingester_0 =
+            IngesterPoolEntry::ready_with_client(IngesterServiceClient::from_mock(mock_ingester_0));
         ingester_pool.insert("test-ingester-0".into(), ingester_0.clone());
 
         let event_broker = EventBroker::default();
@@ -1292,7 +1296,8 @@ mod tests {
                 Ok(response)
             });
 
-        let ingester_0 = IngesterServiceClient::from_mock(mock_ingester_0);
+        let ingester_0 =
+            IngesterPoolEntry::ready_with_client(IngesterServiceClient::from_mock(mock_ingester_0));
         ingester_pool.insert("test-ingester-0".into(), ingester_0.clone());
 
         let event_broker = EventBroker::default();
@@ -1600,7 +1605,8 @@ mod tests {
                 })
             });
 
-        let ingester_0 = IngesterServiceClient::from_mock(mock_ingester_0);
+        let ingester_0 =
+            IngesterPoolEntry::ready_with_client(IngesterServiceClient::from_mock(mock_ingester_0));
         ingester_pool.insert("test-ingester-0".into(), ingester_0.clone());
 
         let event_broker = EventBroker::default();
@@ -1700,7 +1706,8 @@ mod tests {
 
                 Ok(TruncateShardsResponse {})
             });
-        let ingester_0 = IngesterServiceClient::from_mock(mock_ingester_0);
+        let ingester_0 =
+            IngesterPoolEntry::ready_with_client(IngesterServiceClient::from_mock(mock_ingester_0));
         ingester_pool.insert("test-ingester-0".into(), ingester_0.clone());
 
         let mut mock_ingester_1 = MockIngesterService::new();
@@ -1727,7 +1734,8 @@ mod tests {
 
                 Ok(TruncateShardsResponse {})
             });
-        let ingester_1 = IngesterServiceClient::from_mock(mock_ingester_1);
+        let ingester_1 =
+            IngesterPoolEntry::ready_with_client(IngesterServiceClient::from_mock(mock_ingester_1));
         ingester_pool.insert("test-ingester-1".into(), ingester_1.clone());
 
         let mut mock_ingester_3 = MockIngesterService::new();
@@ -1747,7 +1755,8 @@ mod tests {
 
                 Ok(TruncateShardsResponse {})
             });
-        let ingester_3 = IngesterServiceClient::from_mock(mock_ingester_3);
+        let ingester_3 =
+            IngesterPoolEntry::ready_with_client(IngesterServiceClient::from_mock(mock_ingester_3));
         ingester_pool.insert("test-ingester-3".into(), ingester_3.clone());
 
         let event_broker = EventBroker::default();

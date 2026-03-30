@@ -20,6 +20,7 @@ pub mod debug;
 #[cfg(feature = "jemalloc-profiled")]
 pub(crate) mod alloc_tracker;
 pub mod binary_heap;
+mod cpus;
 pub mod fs;
 pub mod io;
 #[cfg(feature = "jemalloc-profiled")]
@@ -36,6 +37,7 @@ pub mod rate_limited_tracing;
 pub mod rate_limiter;
 pub mod rendezvous_hasher;
 pub mod retry;
+pub mod ring_buffer;
 pub mod runtimes;
 pub mod shared_consts;
 pub mod sorted_iter;
@@ -57,12 +59,25 @@ use std::ops::{Range, RangeInclusive};
 use std::str::FromStr;
 
 pub use coolid::new_coolid;
+pub use cpus::num_cpus;
 pub use kill_switch::KillSwitch;
 pub use path_hasher::PathHasher;
 pub use progress::{Progress, ProtectedZoneGuard};
 pub use socket_addr_legacy_hash::SocketAddrLegacyHash;
 pub use stream_utils::{BoxStream, ServiceStream};
 use tracing::{error, info};
+
+/// Returns true at compile time. This function is mostly used with serde to initialize boolean
+/// fields to true.
+pub const fn true_fn() -> bool {
+    true
+}
+
+/// Returns whether the given boolean value is true. This function is mostly used with serde to skip
+/// serializing boolean fields with `skip_serializing_if = "is_true"` when the value is true.
+pub fn is_true(value: &bool) -> bool {
+    *value
+}
 
 pub fn chunk_range(range: Range<usize>, chunk_size: usize) -> impl Iterator<Item = Range<usize>> {
     range.clone().step_by(chunk_size).map(move |block_start| {
@@ -83,43 +98,47 @@ pub fn split_file(split_id: impl Display) -> String {
     format!("{split_id}.split")
 }
 
-pub fn get_from_env<T: FromStr + Debug>(key: &str, default_value: T) -> T {
-    if let Ok(value_str) = std::env::var(key) {
-        if let Ok(value) = T::from_str(&value_str) {
-            info!(value=?value, "using environment variable `{key}` value");
-            return value;
-        } else {
-            error!(value=%value_str, "failed to parse environment variable `{key}` value");
-        }
+fn get_from_env_opt_aux<T: Debug>(
+    key: &str,
+    parse_fn: impl FnOnce(&str) -> Option<T>,
+    sensitive: bool,
+) -> Option<T> {
+    let value_str = std::env::var(key).ok()?;
+    let Some(value) = parse_fn(&value_str) else {
+        error!(value=%value_str, "failed to parse environment variable `{key}` value");
+        return None;
+    };
+    if sensitive {
+        info!("using environment variable `{key}` value");
+    } else {
+        info!(value=?value, "using environment variable `{key}` value");
     }
-    info!(value=?default_value, "using environment variable `{key}` default value");
-    default_value
+    Some(value)
+}
+
+pub fn get_from_env<T: FromStr + Debug>(key: &str, default_value: T, sensitive: bool) -> T {
+    if let Some(value) = get_from_env_opt(key, sensitive) {
+        value
+    } else {
+        info!(default_value=?default_value, "using environment variable `{key}` default value");
+        default_value
+    }
+}
+
+pub fn get_from_env_opt<T: FromStr + Debug>(key: &str, sensitive: bool) -> Option<T> {
+    get_from_env_opt_aux(key, |val_str| val_str.parse().ok(), sensitive)
+}
+
+pub fn get_bool_from_env_opt(key: &str) -> Option<bool> {
+    get_from_env_opt_aux(key, parse_bool_lenient, false)
 }
 
 pub fn get_bool_from_env(key: &str, default_value: bool) -> bool {
-    if let Ok(value_str) = std::env::var(key) {
-        if let Some(value) = parse_bool_lenient(&value_str) {
-            info!(value=%value, "using environment variable `{key}` value");
-            return value;
-        } else {
-            error!(value=%value_str, "failed to parse environment variable `{key}` value");
-        }
-    }
-    info!(value=?default_value, "using environment variable `{key}` default value");
-    default_value
-}
-
-pub fn get_from_env_opt<T: FromStr + Debug>(key: &str) -> Option<T> {
-    let Some(value_str) = std::env::var(key).ok() else {
-        info!("environment variable `{key}` is not set");
-        return None;
-    };
-    if let Ok(value) = T::from_str(&value_str) {
-        info!(value=?value, "using environment variable `{key}` value");
-        Some(value)
+    if let Some(flag_value) = get_bool_from_env_opt(key) {
+        flag_value
     } else {
-        error!(value=%value_str, "failed to parse environment variable `{key}` value");
-        None
+        info!(default_value=%default_value, "using environment variable `{key}` default value");
+        default_value
     }
 }
 
@@ -172,6 +191,40 @@ pub fn no_color() -> bool {
 }
 
 #[macro_export]
+macro_rules! assert_eventually {
+    ($cond:expr, $timeout:expr, $interval:expr) => {
+        let start = std::time::Instant::now();
+        loop {
+            if $cond {
+                break;
+            }
+            if start.elapsed() > $timeout {
+                panic!(
+                    "assertion failed: condition `{}` never became true within {} ms",
+                    stringify!($cond),
+                    $timeout.as_millis()
+                );
+            }
+            tokio::time::sleep($interval).await;
+        }
+    };
+    ($cond:expr, $timeout:expr) => {
+        assert_eventually!($cond, $timeout, std::time::Duration::from_millis(50));
+    };
+    ($cond:expr) => {
+        assert_eventually!($cond, std::time::Duration::from_secs(1));
+    };
+}
+
+/// Returns whether the given index ID corresponds to a metrics index.
+///
+/// Metrics indexes use the Parquet/DataFusion pipeline instead of the Tantivy pipeline.
+/// An index is considered a metrics index if it starts with "otel-metrics" or "metrics-".
+pub fn is_metrics_index(index_id: &str) -> bool {
+    index_id.starts_with("otel-metrics") || index_id.starts_with("metrics-")
+}
+
+#[macro_export]
 macro_rules! ignore_error_kind {
     ($kind:path, $expr:expr) => {
         match $expr {
@@ -197,18 +250,6 @@ pub const fn div_ceil(lhs: i64, rhs: i64) -> i64 {
         d + 1
     } else {
         d
-    }
-}
-
-/// Return the number of vCPU/hyperthreads available.
-/// This number is usually not equal to the number of cpu cores
-pub fn num_cpus() -> usize {
-    match std::thread::available_parallelism() {
-        Ok(num_cpus) => num_cpus.get(),
-        Err(io_error) => {
-            error!(error=?io_error, "failed to detect the number of threads available: arbitrarily returning 2");
-            2
-        }
     }
 }
 
@@ -317,11 +358,11 @@ mod tests {
         // way, we are keeping it that way
 
         const TEST_KEY: &str = "TEST_KEY";
-        assert_eq!(super::get_from_env(TEST_KEY, 10), 10);
+        assert_eq!(super::get_from_env(TEST_KEY, 10, false), 10);
         unsafe { std::env::set_var(TEST_KEY, "15") };
-        assert_eq!(super::get_from_env(TEST_KEY, 10), 15);
+        assert_eq!(super::get_from_env(TEST_KEY, 10, false), 15);
         unsafe { std::env::set_var(TEST_KEY, "1invalidnumber") };
-        assert_eq!(super::get_from_env(TEST_KEY, 10), 10);
+        assert_eq!(super::get_from_env(TEST_KEY, 10, false), 10);
     }
 
     #[test]
@@ -381,6 +422,27 @@ mod tests {
         assert_eq!(div_ceil_u32(2, 3), 1);
         assert_eq!(div_ceil_u32(1, 3), 1);
         assert_eq!(div_ceil_u32(0, 3), 0);
+    }
+
+    #[test]
+    fn test_is_metrics_index() {
+        // OpenTelemetry metrics indexes
+        assert!(is_metrics_index("otel-metrics-v0_7"));
+        assert!(is_metrics_index("otel-metrics"));
+        assert!(is_metrics_index("otel-metrics-custom"));
+
+        // Generic metrics indexes
+        assert!(is_metrics_index("metrics-default"));
+        assert!(is_metrics_index("metrics-"));
+        assert!(is_metrics_index("metrics-my-app"));
+
+        // Non-metrics indexes
+        assert!(!is_metrics_index("otel-logs-v0_7"));
+        assert!(!is_metrics_index("otel-traces-v0_7"));
+        assert!(!is_metrics_index("my-index"));
+        assert!(!is_metrics_index("logs-default"));
+        assert!(!is_metrics_index("metrics")); // No hyphen after "metrics"
+        assert!(!is_metrics_index("my-metrics-index")); // Not prefixed
     }
 
     #[test]

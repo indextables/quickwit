@@ -40,6 +40,7 @@ pub fn split_deletion_grace_period() -> Duration {
         let deletion_grace_period_secs: u64 = crate::get_from_env(
             "QW_SPLIT_DELETION_GRACE_PERIOD_SECS",
             DEFAULT_DELETION_GRACE_PERIOD.as_secs(),
+            false,
         );
         let deletion_grace_period_secs_clamped: u64 = deletion_grace_period_secs.clamp(
             MINIMUM_DELETION_GRACE_PERIOD.as_secs(),
@@ -60,8 +61,14 @@ pub fn split_deletion_grace_period() -> Duration {
 /// being requested.
 pub const SCROLL_BATCH_LEN: usize = 1_000;
 
-/// Prefix used in chitchat to broadcast the list of primary shards hosted by a leader.
+/// Key prefix used in chitchat to broadcast the list of primary shards hosted by a leader.
 pub const INGESTER_PRIMARY_SHARDS_PREFIX: &str = "ingester.primary_shards:";
+
+/// Key used in chitchat to broadcast the status of an ingester.
+pub const INGESTER_STATUS_KEY: &str = "ingester.status";
+
+/// Prefix used in chitchat to broadcast per-source ingester capacity scores and open shard counts.
+pub const INGESTER_CAPACITY_SCORE_PREFIX: &str = "ingester.capacity_score:";
 
 /// File name for the encoded list of fields in the split
 pub const SPLIT_FIELDS_FILE_NAME: &str = "split_fields";

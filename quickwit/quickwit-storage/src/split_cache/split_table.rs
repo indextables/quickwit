@@ -154,18 +154,22 @@ impl SplitTable {
                 self.on_disk_bytes -= num_bytes;
                 crate::metrics::STORAGE_METRICS
                     .searcher_split_cache
+                    .cache_metrics
                     .in_cache_count
                     .dec();
                 crate::metrics::STORAGE_METRICS
                     .searcher_split_cache
+                    .cache_metrics
                     .in_cache_num_bytes
                     .sub(num_bytes as i64);
                 crate::metrics::STORAGE_METRICS
                     .searcher_split_cache
+                    .cache_metrics
                     .evict_num_items
                     .inc();
                 crate::metrics::STORAGE_METRICS
                     .searcher_split_cache
+                    .cache_metrics
                     .evict_num_bytes
                     .inc_by(num_bytes);
                 &mut self.on_disk_splits
@@ -173,10 +177,10 @@ impl SplitTable {
         };
         let is_in_queue = split_queue.remove(&split_info.split_key);
         assert!(is_in_queue);
-        if let Status::Downloading { alive_token } = &split_info.status {
-            if alive_token.strong_count() == 0 {
-                return None;
-            }
+        if let Status::Downloading { alive_token } = &split_info.status
+            && alive_token.strong_count() == 0
+        {
+            return None;
         }
         Some(split_info)
     }
@@ -189,12 +193,11 @@ impl SplitTable {
         }
         let mut splits_to_remove = Vec::new();
         for split in &self.downloading_splits {
-            if let Some(split_info) = self.split_to_status.get(&split.split_ulid) {
-                if let Status::Downloading { alive_token } = &split_info.status {
-                    if alive_token.strong_count() == 0 {
-                        splits_to_remove.push(split.split_ulid);
-                    }
-                }
+            if let Some(split_info) = self.split_to_status.get(&split.split_ulid)
+                && let Status::Downloading { alive_token } = &split_info.status
+                && alive_token.strong_count() == 0
+            {
+                splits_to_remove.push(split.split_ulid);
             }
         }
         for split in splits_to_remove {
@@ -219,10 +222,12 @@ impl SplitTable {
                 self.on_disk_bytes += num_bytes;
                 crate::metrics::STORAGE_METRICS
                     .searcher_split_cache
+                    .cache_metrics
                     .in_cache_count
                     .inc();
                 crate::metrics::STORAGE_METRICS
                     .searcher_split_cache
+                    .cache_metrics
                     .in_cache_num_bytes
                     .add(num_bytes as i64);
                 self.on_disk_splits.insert(split_info.split_key)

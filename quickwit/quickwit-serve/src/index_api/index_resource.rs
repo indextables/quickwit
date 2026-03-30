@@ -23,11 +23,10 @@ use quickwit_index_management::{IndexService, IndexServiceError};
 use quickwit_metastore::{
     IndexMetadata, IndexMetadataResponseExt, ListIndexesMetadataResponseExt, ListSplitsQuery,
     ListSplitsRequestExt, MetastoreServiceStreamSplitsExt, Split, SplitInfo, SplitState,
-    UpdateIndexRequestExt,
 };
 use quickwit_proto::metastore::{
     IndexMetadataRequest, ListIndexesMetadataRequest, ListSplitsRequest, MetastoreError,
-    MetastoreResult, MetastoreService, MetastoreServiceClient, UpdateIndexRequest,
+    MetastoreResult, MetastoreService, MetastoreServiceClient,
 };
 use quickwit_proto::types::IndexId;
 use serde::{Deserialize, Serialize};
@@ -81,7 +80,7 @@ pub fn list_indexes_metadata_handler(
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = Rejection> + Clone {
     warp::path!("indexes")
         .and(warp::get())
-        .and(serde_qs::warp::query(serde_qs::Config::default()))
+        .and(warp::query())
         .and(with_arg(metastore))
         .then(list_indexes_metadata)
         .and(extract_format_from_qs())
@@ -238,7 +237,7 @@ pub fn create_index_handler(
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = Rejection> + Clone {
     warp::path!("indexes")
         .and(warp::post())
-        .and(serde_qs::warp::query(serde_qs::Config::default()))
+        .and(warp::query())
         .and(extract_config_format())
         .and(warp::body::content_length_limit(1024 * 1024))
         .and(warp::filters::body::bytes())
@@ -294,7 +293,7 @@ pub struct UpdateQueryParams {
 }
 
 fn update_index_qp() -> impl Filter<Extract = (UpdateQueryParams,), Error = Rejection> + Clone {
-    serde_qs::warp::query::<UpdateQueryParams>(serde_qs::Config::default())
+    warp::query::<UpdateQueryParams>()
 }
 
 pub fn update_index_handler(
@@ -392,16 +391,10 @@ pub async fn update_index(
     )
     .map_err(IndexServiceError::InvalidConfig)?;
 
-    let update_request = UpdateIndexRequest::try_from_updates(
-        index_uid,
-        &new_index_config.doc_mapping,
-        &new_index_config.indexing_settings,
-        &new_index_config.ingest_settings,
-        &new_index_config.search_settings,
-        &new_index_config.retention_policy_opt,
-    )?;
-    let update_resp = metastore.update_index(update_request).await?;
-    Ok(update_resp.deserialize_index_metadata()?)
+    let index_metadata = index_service
+        .update_index(index_uid, new_index_config)
+        .await?;
+    Ok(index_metadata)
 }
 
 pub fn clear_index_handler(
@@ -449,7 +442,7 @@ pub fn delete_index_handler(
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = Rejection> + Clone {
     warp::path!("indexes" / String)
         .and(warp::delete())
-        .and(serde_qs::warp::query(serde_qs::Config::default()))
+        .and(warp::query())
         .and(with_arg(index_service))
         .then(delete_index)
         .and(extract_format_from_qs())

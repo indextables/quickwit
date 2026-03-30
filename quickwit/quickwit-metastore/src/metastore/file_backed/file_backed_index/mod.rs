@@ -28,10 +28,12 @@ use quickwit_common::pretty::PrettySample;
 use quickwit_config::{
     DocMapping, IndexingSettings, IngestSettings, RetentionPolicy, SearchSettings, SourceConfig,
 };
+use quickwit_parquet_engine::split::{MetricsSplitMetadata, MetricsSplitState};
 use quickwit_proto::metastore::{
     AcquireShardsRequest, AcquireShardsResponse, DeleteQuery, DeleteShardsRequest,
-    DeleteShardsResponse, DeleteTask, EntityKind, ListShardsSubrequest, ListShardsSubresponse,
-    MetastoreError, MetastoreResult, OpenShardSubrequest, OpenShardSubresponse, PruneShardsRequest,
+    DeleteShardsResponse, DeleteTask, EntityKind, IndexStats, ListShardsSubrequest,
+    ListShardsSubresponse, MetastoreError, MetastoreResult, OpenShardSubrequest,
+    OpenShardSubresponse, PruneShardsRequest, SplitStats,
 };
 use quickwit_proto::types::{IndexUid, PublishToken, SourceId, SplitId};
 use serde::{Deserialize, Serialize};
@@ -42,8 +44,19 @@ use tracing::{info, warn};
 
 use super::MutationOccurred;
 use crate::checkpoint::IndexCheckpointDelta;
-use crate::metastore::{SortBy, use_shard_api};
+use crate::metastore::{ListMetricsSplitsQuery, SortBy, use_shard_api};
 use crate::{IndexMetadata, ListSplitsQuery, Split, SplitMetadata, SplitState, split_tag_filter};
+
+/// A stored metrics split with its state.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct StoredMetricsSplit {
+    /// The split metadata.
+    pub metadata: MetricsSplitMetadata,
+    /// The split state.
+    pub state: MetricsSplitState,
+    /// Update timestamp (Unix epoch seconds).
+    pub update_timestamp: i64,
+}
 
 /// A `FileBackedIndex` object carries an index metadata and its split metadata.
 // This struct is meant to be used only within the [`FileBackedMetastore`]. The public visibility is
@@ -59,6 +72,8 @@ pub(crate) struct FileBackedIndex {
     per_source_shards: HashMap<SourceId, Shards>,
     /// Delete tasks.
     delete_tasks: Vec<DeleteTask>,
+    /// Metrics splits (for metrics pipeline).
+    metrics_splits: HashMap<String, StoredMetricsSplit>,
     /// Stamper.
     stamper: Stamper,
     /// Flag used to avoid polling the metastore if
@@ -147,6 +162,7 @@ impl From<IndexMetadata> for FileBackedIndex {
             splits: Default::default(),
             per_source_shards,
             delete_tasks: Default::default(),
+            metrics_splits: Default::default(),
             stamper: Default::default(),
             recently_modified: false,
             discarded: false,
@@ -163,11 +179,23 @@ enum DeleteSplitOutcome {
 
 impl FileBackedIndex {
     /// Constructor.
+    #[allow(dead_code)]
     pub fn new(
         metadata: IndexMetadata,
         splits: Vec<Split>,
         per_source_shards: HashMap<SourceId, Shards>,
         delete_tasks: Vec<DeleteTask>,
+    ) -> Self {
+        Self::new_with_metrics_splits(metadata, splits, per_source_shards, delete_tasks, vec![])
+    }
+
+    /// Constructor with metrics splits.
+    pub fn new_with_metrics_splits(
+        metadata: IndexMetadata,
+        splits: Vec<Split>,
+        per_source_shards: HashMap<SourceId, Shards>,
+        delete_tasks: Vec<DeleteTask>,
+        metrics_splits: Vec<StoredMetricsSplit>,
     ) -> Self {
         let last_opstamp = delete_tasks
             .iter()
@@ -178,11 +206,16 @@ impl FileBackedIndex {
             .into_iter()
             .map(|split| (split.split_id().to_string(), split))
             .collect();
+        let metrics_splits = metrics_splits
+            .into_iter()
+            .map(|split| (split.metadata.split_id.to_string(), split))
+            .collect();
         Self {
             metadata,
             splits,
             per_source_shards,
             delete_tasks,
+            metrics_splits,
             stamper: Stamper::new(last_opstamp),
             recently_modified: false,
             discarded: false,
@@ -221,7 +254,7 @@ impl FileBackedIndex {
         ingest_settings: IngestSettings,
         search_settings: SearchSettings,
         retention_policy_opt: Option<RetentionPolicy>,
-    ) -> bool {
+    ) -> MetastoreResult<bool> {
         self.metadata.update_index_config(
             doc_mapping,
             indexing_settings,
@@ -246,14 +279,14 @@ impl FileBackedIndex {
         // Check whether the split exists.
         // If the split exists, we check what state it is in. If it's anything other than `Staged`
         // something has gone very wrong and we should abort the operation.
-        if let Some(split) = self.splits.get(split_metadata.split_id()) {
-            if split.split_state != SplitState::Staged {
-                let entity = EntityKind::Split {
-                    split_id: split.split_id().to_string(),
-                };
-                let message = "split is not staged".to_string();
-                return Err(MetastoreError::FailedPrecondition { entity, message });
-            }
+        if let Some(split) = self.splits.get(split_metadata.split_id())
+            && split.split_state != SplitState::Staged
+        {
+            let entity = EntityKind::Split {
+                split_id: split.split_id().to_string(),
+            };
+            let message = "split is not staged".to_string();
+            return Err(MetastoreError::FailedPrecondition { entity, message });
         }
         let now_timestamp = OffsetDateTime::now_utc().unix_timestamp();
         let split = Split {
@@ -497,6 +530,34 @@ impl FileBackedIndex {
         Ok(())
     }
 
+    /// Gets IndexStats for this index
+    pub(crate) fn get_stats(&self) -> MetastoreResult<IndexStats> {
+        let mut staged_stats = SplitStats::default();
+        let mut published_stats = SplitStats::default();
+        let mut marked_for_deletion_stats = SplitStats::default();
+
+        for split in self.splits.values() {
+            match split.split_state {
+                SplitState::Staged => {
+                    staged_stats.add_split(split.split_metadata.footer_offsets.end)
+                }
+                SplitState::Published => {
+                    published_stats.add_split(split.split_metadata.footer_offsets.end)
+                }
+                SplitState::MarkedForDeletion => {
+                    marked_for_deletion_stats.add_split(split.split_metadata.footer_offsets.end)
+                }
+            }
+        }
+
+        Ok(IndexStats {
+            index_uid: Some(self.index_uid().clone()),
+            staged: Some(staged_stats),
+            published: Some(published_stats),
+            marked_for_deletion: Some(marked_for_deletion_stats),
+        })
+    }
+
     /// Adds a source.
     pub(crate) fn add_source(&mut self, source_config: SourceConfig) -> MetastoreResult<()> {
         let index_uid = self.index_uid().clone();
@@ -668,6 +729,257 @@ impl FileBackedIndex {
         self.get_shards_for_source_mut(&checkpoint_delta.source_id)?
             .try_apply_delta(checkpoint_delta.source_delta, publish_token)
     }
+
+    // Metrics Splits API
+
+    /// Stages metrics splits.
+    pub(crate) fn stage_metrics_splits(
+        &mut self,
+        splits_metadata: Vec<MetricsSplitMetadata>,
+    ) -> MetastoreResult<bool> {
+        if splits_metadata.is_empty() {
+            return Ok(false);
+        }
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        for metadata in splits_metadata {
+            let split_id = metadata.split_id.to_string();
+
+            // Reject if the split already exists in a non-Staged state.
+            if let Some(existing) = self.metrics_splits.get(&split_id)
+                && existing.state != MetricsSplitState::Staged
+            {
+                let entity = EntityKind::Split {
+                    split_id: split_id.clone(),
+                };
+                let message = "split is not in Staged state".to_string();
+                return Err(MetastoreError::FailedPrecondition { entity, message });
+            }
+
+            let stored = StoredMetricsSplit {
+                metadata,
+                state: MetricsSplitState::Staged,
+                update_timestamp: now,
+            };
+            self.metrics_splits.insert(split_id, stored);
+        }
+        Ok(true)
+    }
+
+    /// Publishes metrics splits (transitions from Staged to Published).
+    pub(crate) fn publish_metrics_splits(
+        &mut self,
+        staged_split_ids: &[String],
+        replaced_split_ids: &[String],
+        checkpoint_delta_opt: Option<IndexCheckpointDelta>,
+        publish_token_opt: Option<PublishToken>,
+    ) -> MetastoreResult<bool> {
+        // Apply checkpoint delta to index metadata, matching publish_splits behavior.
+        if let Some(checkpoint_delta) = checkpoint_delta_opt {
+            let source_id = checkpoint_delta.source_id.clone();
+            let source = self.metadata.sources.get(&source_id).ok_or_else(|| {
+                MetastoreError::NotFound(EntityKind::Source {
+                    index_id: self.index_id().to_string(),
+                    source_id: source_id.clone(),
+                })
+            })?;
+
+            if use_shard_api(&source.source_params) {
+                let publish_token = publish_token_opt.ok_or_else(|| {
+                    let message = format!(
+                        "publish token is required for publishing splits for source `{source_id}`"
+                    );
+                    MetastoreError::InvalidArgument { message }
+                })?;
+                self.try_apply_delta_v2(checkpoint_delta, publish_token)?;
+            } else {
+                self.metadata
+                    .checkpoint
+                    .try_apply_delta(checkpoint_delta)
+                    .map_err(|error| {
+                        quickwit_common::rate_limited_error!(
+                            limit_per_min = 6,
+                            index = self.index_id(),
+                            "failed to apply checkpoint delta"
+                        );
+                        let entity = EntityKind::CheckpointDelta {
+                            index_id: self.index_id().to_string(),
+                            source_id,
+                        };
+                        let message = error.to_string();
+                        MetastoreError::FailedPrecondition { entity, message }
+                    })?;
+            }
+        }
+
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+
+        // Verify all staged splits exist and are in Staged state
+        for split_id in staged_split_ids {
+            let split = self.metrics_splits.get(split_id).ok_or_else(|| {
+                MetastoreError::NotFound(EntityKind::Splits {
+                    split_ids: vec![split_id.clone()],
+                })
+            })?;
+            if split.state != MetricsSplitState::Staged {
+                return Err(MetastoreError::FailedPrecondition {
+                    entity: EntityKind::Splits {
+                        split_ids: vec![split_id.clone()],
+                    },
+                    message: format!("split {} is not in Staged state", split_id),
+                });
+            }
+        }
+
+        // Transition staged splits to Published
+        for split_id in staged_split_ids {
+            if let Some(split) = self.metrics_splits.get_mut(split_id) {
+                split.state = MetricsSplitState::Published;
+                split.update_timestamp = now;
+            }
+        }
+
+        // Mark replaced splits for deletion
+        for split_id in replaced_split_ids {
+            if let Some(split) = self.metrics_splits.get_mut(split_id) {
+                split.state = MetricsSplitState::MarkedForDeletion;
+                split.update_timestamp = now;
+            }
+        }
+
+        Ok(true)
+    }
+
+    /// Lists metrics splits matching the query.
+    pub(crate) fn list_metrics_splits(
+        &self,
+        query: &ListMetricsSplitsQuery,
+    ) -> Vec<StoredMetricsSplit> {
+        self.metrics_splits
+            .values()
+            .filter(|split| metrics_split_matches_query(split, query))
+            .cloned()
+            .collect()
+    }
+
+    /// Marks metrics splits for deletion.
+    pub(crate) fn mark_metrics_splits_for_deletion(
+        &mut self,
+        split_ids: &[String],
+    ) -> MetastoreResult<bool> {
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        let mut mutated = false;
+        for split_id in split_ids {
+            if let Some(split) = self.metrics_splits.get_mut(split_id) {
+                split.state = MetricsSplitState::MarkedForDeletion;
+                split.update_timestamp = now;
+                mutated = true;
+            }
+        }
+        Ok(mutated)
+    }
+
+    /// Deletes metrics splits (must be MarkedForDeletion).
+    pub(crate) fn delete_metrics_splits(&mut self, split_ids: &[String]) -> MetastoreResult<bool> {
+        for split_id in split_ids {
+            if let Some(split) = self.metrics_splits.get(split_id)
+                && split.state != MetricsSplitState::MarkedForDeletion
+            {
+                return Err(MetastoreError::FailedPrecondition {
+                    entity: EntityKind::Splits {
+                        split_ids: vec![split_id.clone()],
+                    },
+                    message: format!("split {} is not marked for deletion", split_id),
+                });
+            }
+        }
+        let mut mutated = false;
+        for split_id in split_ids {
+            if self.metrics_splits.remove(split_id).is_some() {
+                mutated = true;
+            }
+        }
+        Ok(mutated)
+    }
+}
+
+/// Checks if a metrics split matches the query criteria.
+fn metrics_split_matches_query(split: &StoredMetricsSplit, query: &ListMetricsSplitsQuery) -> bool {
+    // Filter by state
+    if !query.split_states.is_empty() {
+        let state_str = split.state.as_str();
+        if !query.split_states.iter().any(|s| s == state_str) {
+            return false;
+        }
+    }
+
+    // Filter by time range
+    if let Some(start) = query.time_range_start
+        && (split.metadata.time_range.end_secs as i64) < start
+    {
+        return false;
+    }
+    if let Some(end) = query.time_range_end
+        && (split.metadata.time_range.start_secs as i64) > end
+    {
+        return false;
+    }
+
+    // Filter by metric names
+    if !query.metric_names.is_empty() {
+        let has_match = query
+            .metric_names
+            .iter()
+            .any(|name| split.metadata.metric_names.contains(name));
+        if !has_match {
+            return false;
+        }
+    }
+
+    // Filter by tags (service, env, datacenter, region, host)
+    if let Some(service) = &query.tag_service {
+        match split.metadata.service_names() {
+            Some(services) if services.contains(service) => {}
+            _ => return false,
+        }
+    }
+    if let Some(env) = &query.tag_env {
+        if let Some(envs) = split.metadata.low_cardinality_tags.get("env") {
+            if !envs.contains(env) {
+                return false;
+            }
+        } else {
+            return false;
+        }
+    }
+    if let Some(datacenter) = &query.tag_datacenter {
+        if let Some(dcs) = split.metadata.low_cardinality_tags.get("datacenter") {
+            if !dcs.contains(datacenter) {
+                return false;
+            }
+        } else {
+            return false;
+        }
+    }
+    if let Some(region) = &query.tag_region {
+        if let Some(regions) = split.metadata.low_cardinality_tags.get("region") {
+            if !regions.contains(region) {
+                return false;
+            }
+        } else {
+            return false;
+        }
+    }
+    if let Some(host) = &query.tag_host {
+        if let Some(hosts) = split.metadata.low_cardinality_tags.get("host") {
+            if !hosts.contains(host) {
+                return false;
+            }
+        } else {
+            return false;
+        }
+    }
+
+    true
 }
 
 /// Stamper provides Opstamps, which is just an auto-increment id to label
@@ -735,17 +1047,17 @@ fn split_query_predicate(split: &&Split, query: &ListSplitsQuery) -> bool {
         if !query.time_range.overlaps_with(range.clone()) {
             return false;
         }
-        if let Some(v) = query.max_time_range_end {
-            if range.end() > &v {
-                return false;
-            }
+        if let Some(v) = query.max_time_range_end
+            && range.end() > &v
+        {
+            return false;
         }
     }
 
-    if let Some(node_id) = &query.node_id {
-        if split.split_metadata.node_id != *node_id {
-            return false;
-        }
+    if let Some(node_id) = &query.node_id
+        && split.split_metadata.node_id != *node_id
+    {
+        return false;
     }
 
     if let Some((index_uid, split_id)) = &query.after_split {
@@ -764,16 +1076,16 @@ fn split_query_predicate(split: &&Split, query: &ListSplitsQuery) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeSet, HashMap};
 
     use quickwit_doc_mapper::tag_pruning::TagFilterAst;
     use quickwit_proto::ingest::Shard;
-    use quickwit_proto::metastore::ListShardsSubrequest;
+    use quickwit_proto::metastore::{ListShardsSubrequest, SplitStats};
     use quickwit_proto::types::{IndexUid, SourceId};
 
     use super::FileBackedIndex;
     use crate::file_backed::file_backed_index::split_query_predicate;
-    use crate::{ListSplitsQuery, Split, SplitMetadata, SplitState};
+    use crate::{IndexMetadata, ListSplitsQuery, Split, SplitMetadata, SplitState};
 
     impl FileBackedIndex {
         pub(crate) fn insert_shards(&mut self, source_id: &SourceId, shards: Vec<Shard>) {
@@ -804,6 +1116,7 @@ mod tests {
                     time_range: Some(32..=40),
                     tags: BTreeSet::from(["tag-1".to_string()]),
                     create_timestamp: 12,
+                    footer_offsets: 0..2048,
                     ..Default::default()
                 },
                 split_state: SplitState::Staged,
@@ -817,6 +1130,7 @@ mod tests {
                     time_range: None,
                     tags: BTreeSet::from(["tag-2".to_string(), "tag-3".to_string()]),
                     create_timestamp: 5,
+                    footer_offsets: 0..1024,
                     ..Default::default()
                 },
                 split_state: SplitState::MarkedForDeletion,
@@ -830,6 +1144,7 @@ mod tests {
                     time_range: Some(0..=90),
                     tags: BTreeSet::from(["tag-2".to_string(), "tag-4".to_string()]),
                     create_timestamp: 64,
+                    footer_offsets: 0..512,
                     ..Default::default()
                 },
                 split_state: SplitState::Published,
@@ -943,5 +1258,31 @@ mod tests {
         assert!(!split_query_predicate(&&split_1, &query));
         assert!(!split_query_predicate(&&split_2, &query));
         assert!(!split_query_predicate(&&split_3, &query));
+    }
+
+    #[test]
+    fn test_get_stats() {
+        let index_id = "test-index";
+        let index_metadata = IndexMetadata::for_test(index_id, "file:///qwdata/indexes/test-index");
+        let index =
+            FileBackedIndex::new(index_metadata, make_splits().into(), HashMap::new(), vec![]);
+
+        let expected_staged = Some(SplitStats {
+            num_splits: 1,
+            total_size_bytes: 2048,
+        });
+        let expected_published = Some(SplitStats {
+            num_splits: 1,
+            total_size_bytes: 512,
+        });
+        let expected_marked_for_deletion = Some(SplitStats {
+            num_splits: 1,
+            total_size_bytes: 1024,
+        });
+        let stats = index.get_stats().unwrap();
+
+        assert_eq!(stats.staged, expected_staged);
+        assert_eq!(stats.published, expected_published);
+        assert_eq!(stats.marked_for_deletion, expected_marked_for_deletion);
     }
 }

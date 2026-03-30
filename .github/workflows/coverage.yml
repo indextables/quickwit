@@ -11,12 +11,16 @@ on:
       - quickwit/Cargo.lock
       - quickwit/quickwit-*/**
 
+permissions:
+  contents: read
+
 env:
   AWS_REGION: us-east-1
   AWS_ACCESS_KEY_ID: "placeholder"
   AWS_SECRET_ACCESS_KEY: "placeholder"
   CARGO_INCREMENTAL: 0
-  PUBSUB_EMULATOR_HOST: "localhost:9898"
+  LOCALSTACK_ACKNOWLEDGE_ACCOUNT_REQUIREMENT: 1
+  PUBSUB_EMULATOR_HOST: "localhost:8681"
   QW_DISABLE_TELEMETRY: 1
   QW_S3_ENDPOINT: "http://localhost:4566" # Services are exposed as localhost because we are not running coverage in a container.
   QW_S3_FORCE_PATH_STYLE_ACCESS: 1
@@ -28,6 +32,9 @@ jobs:
     name: Coverage
     runs-on: gh-ubuntu-arm64
     timeout-minutes: 40
+    permissions:
+      contents: read
+      actions: write
     # Setting a containing will require to fix the QW_S3_ENDPOINT to http://localstack:4566
     services:
       localstack:
@@ -59,51 +66,50 @@ jobs:
           --health-retries 5
 
       kafka-broker:
-        image: confluentinc/cp-kafka:7.2.1
+        image: confluentinc/confluent-local:7.4.11
         ports:
           - "9092:9092"
           - "9101:9101"
         env:
-          KAFKA_BROKER_ID: 1
-          KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
-          KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
-          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-broker:29092,PLAINTEXT_HOST://localhost:9092
+          # Mode KRaft (Single Node)
+          KAFKA_NODE_ID: 1
+          KAFKA_PROCESS_ROLES: 'broker,controller'
+          KAFKA_CONTROLLER_QUORUM_VOTERS: '1@localhost:9093'
+          KAFKA_LOG4J_LOGGERS: "org.apache.kafka.image.loader.MetadataLoader=WARN"
+
+          # Listeners
+          KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT'
+          KAFKA_LISTENERS: 'EXTERNAL://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093'
+          KAFKA_ADVERTISED_LISTENERS: 'EXTERNAL://localhost:9092'
+          KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+          KAFKA_INTER_BROKER_LISTENER_NAME: 'EXTERNAL'
+
+          # Configuration simplifiée
           KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
           KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
-          KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
           KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
-          KAFKA_JMX_PORT: 9101
-          KAFKA_JMX_HOSTNAME: localhost
-          KAFKA_HEAP_OPTS: -Xms256M -Xmx256M
-        options: >-
-          --health-cmd "cub kafka-ready -b localhost:9092 1 5"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+          KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
 
-      zookeeper:
-        image: confluentinc/cp-zookeeper:7.2.1
-        ports:
-          - "2181:2181"
-        env:
+          # ID du Cluster (Nécessaire pour KRaft)
+          CLUSTER_ID: 'MkU3OEVBNTcwNTJENDM2Qk'
+
           KAFKA_HEAP_OPTS: -Xms256M -Xmx256M
-          ZOOKEEPER_CLIENT_PORT: 2181
-          ZOOKEEPER_TICK_TIME: 2000
+
         options: >-
-          --health-cmd "cub zk-ready localhost:2181 5"
+          --health-cmd "ub kafka-ready -b localhost:9092 1 5"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
 
       gcp-pubsub-emulator:
-        image: thekevjames/gcloud-pubsub-emulator:7555256f2c
+        image: thekevjames/gcloud-pubsub-emulator:550.0.0
         ports:
-          - "9898:8681"
+          - "8681:8681"
         env:
           PUBSUB_PROJECT1: "quickwit-emulator,emulator_topic:emulator_subscription"
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install lib libsasl2
         run: |
@@ -111,7 +117,11 @@ jobs:
           sudo apt install libsasl2-dev
           sudo apt install libsasl2-2
 
-      - uses: actions/cache@v4
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v.6.2.0
+        with:
+          python-version: '3.11'
+
+      - uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
         with:
           path: |
             ~/.cargo/git
@@ -121,12 +131,15 @@ jobs:
             ${{ runner.os }}-cargo-test-${{ hashFiles('Cargo.lock') }}
             ${{ runner.os }}-cargo-test
 
-      - name: Install awslocal
-        run: pip install awscli-local
+      - name: Install python packages
+        run: |
+          pip install --user --require-hashes -r ${{ github.workspace }}/.github/workflows/requirements.txt
+          pipenv install --deploy --ignore-pipfile
+        working-directory: ./quickwit/quickwit-cli/tests
 
       - name: Prepare LocalStack S3
-        run: ./quickwit-cli/tests/prepare_tests.sh
-        working-directory: ./quickwit
+        run: pipenv run ./prepare_tests.sh
+        working-directory: ./quickwit/quickwit-cli/tests
 
       # GitHub Actions does not allow services to be started with a custom command,
       # so we are running Azurite as a container manually.
@@ -145,7 +158,7 @@ jobs:
         run: rustup update stable
 
       - name: Install cargo-llvm-cov, cargo-nextest, and protoc
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@90558ad1e179036f31467972b00dec6cb80701fa # v2.66.3
         with:
           tool: cargo-llvm-cov,nextest,protoc
 
@@ -160,7 +173,7 @@ jobs:
         working-directory: ./quickwit
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@671740ac38dd9b0130fbe1cec585b89eea48d3de # v5.5.2
         with:
           token: ${{ secrets.CODECOV_TOKEN }} # not required for public repos
           files: ./quickwit/lcov.info
@@ -172,7 +185,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Send Message
-        uses: sarisia/actions-status-discord@v1
+        uses: sarisia/actions-status-discord@eb045afee445dc055c18d3d90bd0f244fd062708 # v1.16.0
         with:
           webhook: ${{ secrets.DISCORD_WEBHOOK }}
           nodetail: true

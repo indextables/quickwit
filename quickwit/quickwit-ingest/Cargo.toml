@@ -30,6 +30,7 @@ serde_json_borrow = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }
+tonic-prost = { workspace = true }
 tower = { workspace = true }
 tracing = { workspace = true }
 ulid = { workspace = true }
@@ -43,7 +44,6 @@ quickwit-doc-mapper = { workspace = true, features = ["testsuite"] }
 quickwit-proto = { workspace = true }
 
 [dev-dependencies]
-itertools = { workspace = true }
 mockall = { workspace = true }
 rand = { workspace = true }
 rand_distr = { workspace = true }

@@ -23,7 +23,7 @@ use std::time::Duration;
 
 use anyhow::{bail, ensure};
 use bytesize::ByteSize;
-use legacy_http::HeaderMap;
+use http::HeaderMap;
 use quickwit_common::net::HostAddr;
 use quickwit_common::shared_consts::{
     DEFAULT_SHARD_BURST_LIMIT, DEFAULT_SHARD_SCALE_UP_FACTOR, DEFAULT_SHARD_THROUGHPUT_LIMIT,
@@ -32,7 +32,7 @@ use quickwit_common::uri::Uri;
 use quickwit_proto::indexing::CpuCapacity;
 use quickwit_proto::tonic::codec::CompressionEncoding;
 use quickwit_proto::types::NodeId;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use tracing::{info, warn};
 
 use crate::node_config::serialize::load_node_config_with_env;
@@ -264,11 +264,30 @@ impl SplitCacheLimits {
 pub struct SearcherConfig {
     pub aggregation_memory_limit: ByteSize,
     pub aggregation_bucket_limit: u32,
-    pub fast_field_cache_capacity: ByteSize,
-    pub split_footer_cache_capacity: ByteSize,
-    pub partial_request_cache_capacity: ByteSize,
+
+    #[serde(alias = "fast_field_cache_capacity")]
+    #[serde(
+        deserialize_with = "CacheConfig::deserialize_with_default::<_, {ByteSize::gb(1).as_u64()}>"
+    )]
+    pub fast_field_cache: CacheConfig,
+    #[serde(alias = "split_footer_cache_capacity")]
+    #[serde(deserialize_with = "CacheConfig::deserialize_with_default::<_, \
+                                {ByteSize::mb(500).as_u64()}>")]
+    pub split_footer_cache: CacheConfig,
+    #[serde(alias = "partial_request_cache_capacity")]
+    #[serde(deserialize_with = "CacheConfig::deserialize_with_default::<_, \
+                                {ByteSize::mb(64).as_u64()}>")]
+    pub partial_request_cache: CacheConfig,
+    #[serde(alias = "predicate_cache_capacity")]
+    #[serde(deserialize_with = "CacheConfig::deserialize_with_default::<_, \
+                                {ByteSize::mb(256).as_u64()}>")]
+    pub predicate_cache: CacheConfig,
+
     pub max_num_concurrent_split_searches: usize,
-    pub max_num_concurrent_split_streams: usize,
+    pub max_splits_per_search: Option<usize>,
+    // Deprecated: stream search requests are no longer supported.
+    #[serde(alias = "max_num_concurrent_split_streams", default, skip_serializing)]
+    pub _max_num_concurrent_split_streams: Option<serde::de::IgnoredAny>,
     // Strangely, if None, this will also have the effect of not forwarding
     // to searcher.
     // TODO document and fix if necessary.
@@ -281,6 +300,176 @@ pub struct SearcherConfig {
     pub storage_timeout_policy: Option<StorageTimeoutPolicy>,
     pub warmup_memory_budget: ByteSize,
     pub warmup_single_split_initial_allocation: ByteSize,
+    /// Lambda configuration for serverless leaf search execution.
+    /// If set, enables Lambda execution for leaf search.
+    ///
+    /// If set, and Quickwit cannot access the Lambda (after a deploy attempt if
+    /// auto deploy is set up), Quickwit will log an error and
+    /// fail on startup.
+    #[serde(default)]
+    pub lambda: Option<LambdaConfig>,
+}
+
+/// Configuration for AWS Lambda leaf search execution.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LambdaConfig {
+    /// AWS Lambda function name.
+    #[serde(default = "LambdaConfig::default_function_name")]
+    pub function_name: String,
+    /// Maximum number of splits per Lambda invocation.
+    #[serde(default = "LambdaConfig::default_max_splits_per_invocation")]
+    pub max_splits_per_invocation: NonZeroUsize,
+    /// Maximum number of splits to process locally before offloading to Lambda.
+    /// When the number of pending split searches exceeds this threshold,
+    /// new splits are offloaded to Lambda instead of being queued locally.
+    /// A value of 0 offloads everything to Lambda.
+    #[serde(default = "LambdaConfig::default_offload_threshold")]
+    pub offload_threshold: usize,
+    /// Auto-deploy configuration. If set, Quickwit will automatically deploy
+    /// the Lambda function at startup.
+    /// If deploying a lambda fails, Quickwit will log an error and fail.
+    #[serde(default)]
+    pub auto_deploy: Option<LambdaDeployConfig>,
+}
+
+impl LambdaConfig {
+    #[cfg(feature = "testsuite")]
+    pub fn for_test() -> Self {
+        Self {
+            function_name: Self::default_function_name(),
+            max_splits_per_invocation: Self::default_max_splits_per_invocation(),
+            offload_threshold: Self::default_offload_threshold(),
+            auto_deploy: None,
+        }
+    }
+
+    fn default_function_name() -> String {
+        "quickwit-lambda-search".to_string()
+    }
+    fn default_max_splits_per_invocation() -> NonZeroUsize {
+        NonZeroUsize::new(10).unwrap()
+    }
+    fn default_offload_threshold() -> usize {
+        100
+    }
+}
+
+/// Configuration for automatic Lambda function deployment.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LambdaDeployConfig {
+    /// IAM execution role ARN for the Lambda function.
+    /// The role only requires GetObject permission to the targeted S3 bucket.
+    pub execution_role_arn: String,
+    /// Memory size for the Lambda function.
+    /// It will be rounded up to the nearest multiple of 1MiB.
+    #[serde(default = "LambdaDeployConfig::default_memory_size")]
+    pub memory_size: ByteSize,
+    /// Timeout for Lambda invocations in seconds.
+    #[serde(default = "LambdaDeployConfig::default_invocation_timeout_secs")]
+    pub invocation_timeout_secs: u64,
+}
+
+impl LambdaDeployConfig {
+    fn default_memory_size() -> ByteSize {
+        // Empirically this implies between 4 and 6 vCPUs.
+        ByteSize::gib(5)
+    }
+    fn default_invocation_timeout_secs() -> u64 {
+        15
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CacheConfig {
+    #[serde(default)]
+    capacity: Option<ByteSize>,
+    #[serde(default)]
+    policy: Option<CachePolicy>,
+
+    // Cache configs inside the virtual cache aren't allowed to contain virtual cache
+    #[serde(default)]
+    pub virtual_caches: Vec<CacheConfig>,
+}
+
+impl CacheConfig {
+    pub fn no_cache() -> Self {
+        CacheConfig {
+            capacity: None,
+            policy: None,
+            virtual_caches: Vec::new(),
+        }
+    }
+
+    pub fn default_with_capacity(capacity: ByteSize) -> Self {
+        CacheConfig {
+            capacity: Some(capacity),
+            policy: None,
+            virtual_caches: Vec::new(),
+        }
+    }
+
+    pub fn capacity(&self) -> ByteSize {
+        // this should always be there
+        self.capacity.unwrap_or_default()
+    }
+
+    pub fn capacity_for_virtual_cache(&mut self, real_capacity: ByteSize) -> ByteSize {
+        let capacity = self.capacity.unwrap_or(real_capacity);
+        self.capacity = Some(capacity);
+        capacity
+    }
+
+    pub fn policy(&self) -> CachePolicy {
+        self.policy.unwrap_or_default()
+    }
+
+    pub fn policy_for_virtual_cache(&mut self, real_policy: CachePolicy) -> CachePolicy {
+        let policy = self.policy.unwrap_or(real_policy);
+        self.policy = Some(policy);
+        policy
+    }
+
+    fn deserialize_with_default<'de, D, const DEFAULT_CAPACITY: u64>(
+        deserializer: D,
+    ) -> Result<CacheConfig, D::Error>
+    where D: Deserializer<'de> {
+        use serde_with::{DeserializeAs, FromInto, PickFirst, Same};
+
+        let mut cache_config: CacheConfig =
+            PickFirst::<(Same, FromInto<ByteSize>)>::deserialize_as(deserializer)?;
+        if cache_config.capacity.is_none() {
+            cache_config.capacity = Some(ByteSize::b(DEFAULT_CAPACITY));
+        }
+        Ok(cache_config)
+    }
+}
+
+impl From<ByteSize> for CacheConfig {
+    fn from(capacity: ByteSize) -> Self {
+        CacheConfig::default_with_capacity(capacity)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum CachePolicy {
+    #[default]
+    Lru,
+    S3Fifo,
+    TinyLfu,
+}
+
+impl std::fmt::Display for CachePolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            CachePolicy::Lru => f.write_str("lru"),
+            CachePolicy::S3Fifo => f.write_str("s3-fifo"),
+            CachePolicy::TinyLfu => f.write_str("tiny-lfu"),
+        }
+    }
 }
 
 /// Configuration controlling how fast a searcher should timeout a `get_slice`
@@ -319,18 +508,21 @@ impl StorageTimeoutPolicy {
 impl Default for SearcherConfig {
     fn default() -> Self {
         SearcherConfig {
-            fast_field_cache_capacity: ByteSize::gb(1),
-            split_footer_cache_capacity: ByteSize::mb(500),
-            partial_request_cache_capacity: ByteSize::mb(64),
-            max_num_concurrent_split_streams: 100,
+            fast_field_cache: CacheConfig::default_with_capacity(ByteSize::gb(1)),
+            split_footer_cache: CacheConfig::default_with_capacity(ByteSize::mb(500)),
+            partial_request_cache: CacheConfig::default_with_capacity(ByteSize::mb(64)),
+            predicate_cache: CacheConfig::default_with_capacity(ByteSize::mb(256)),
             max_num_concurrent_split_searches: 100,
+            max_splits_per_search: None,
+            _max_num_concurrent_split_streams: None,
             aggregation_memory_limit: ByteSize::mb(500),
             aggregation_bucket_limit: 65000,
             split_cache: None,
             request_timeout_secs: Self::default_request_timeout_secs(),
             storage_timeout_policy: None,
             warmup_memory_budget: ByteSize::gb(100),
-            warmup_single_split_initial_allocation: ByteSize::gb(1),
+            warmup_single_split_initial_allocation: ByteSize::mb(300),
+            lambda: None,
         }
     }
 }
@@ -352,16 +544,6 @@ impl SearcherConfig {
                     "max_num_concurrent_split_searches ({}) must be lower or equal to \
                      split_cache.max_file_descriptors ({})",
                     self.max_num_concurrent_split_searches,
-                    split_cache_limits.max_file_descriptors
-                );
-            }
-            if self.max_num_concurrent_split_streams
-                > split_cache_limits.max_file_descriptors.get() as usize
-            {
-                anyhow::bail!(
-                    "max_num_concurrent_split_streams ({}) must be lower or equal to \
-                     split_cache.max_file_descriptors ({})",
-                    self.max_num_concurrent_split_streams,
                     split_cache_limits.max_file_descriptors
                 );
             }
@@ -461,23 +643,23 @@ impl IngestApiConfig {
         ensure!(
             self.max_queue_disk_usage > ByteSize::mib(256),
             "max_queue_disk_usage must be at least 256 MiB, got `{}`",
-            self.max_queue_disk_usage
+            self.max_queue_disk_usage.display().si()
         );
         ensure!(
             self.max_queue_disk_usage >= self.max_queue_memory_usage,
             "max_queue_disk_usage ({}) must be at least max_queue_memory_usage ({})",
-            self.max_queue_disk_usage,
-            self.max_queue_memory_usage
+            self.max_queue_disk_usage.display().si(),
+            self.max_queue_memory_usage.display().si()
         );
         info!(
             "ingestion shard throughput limit: {}",
-            self.shard_throughput_limit
+            self.shard_throughput_limit.display().si()
         );
         ensure!(
             self.shard_throughput_limit >= ByteSize::mib(1)
                 && self.shard_throughput_limit <= ByteSize::mib(20),
             "shard_throughput_limit ({}) must be within 1mb and 20mb",
-            self.shard_throughput_limit
+            self.shard_throughput_limit.display().si()
         );
         // The newline delimited format is persisted as something a bit larger
         // (lines prefixed with their length)
@@ -570,6 +752,7 @@ impl Default for JaegerConfig {
 pub struct NodeConfig {
     pub cluster_id: String,
     pub node_id: NodeId,
+    pub availability_zone: Option<String>,
     pub enabled_services: HashSet<QuickwitService>,
     pub gossip_listen_addr: SocketAddr,
     pub grpc_listen_addr: SocketAddr,
@@ -618,15 +801,17 @@ impl NodeConfig {
         // validation purposes. Additionally, we need to append a default port if necessary and
         // finally return the addresses as strings, which is tricky for IPv6. We let the logic baked
         // in `HostAddr` handle this complexity.
+        let mut found_something = false;
         for peer_seed in &self.peer_seeds {
             let peer_seed_addr = HostAddr::parse_with_default_port(peer_seed, default_gossip_port)?;
             if let Err(error) = peer_seed_addr.resolve().await {
                 warn!(peer_seed = %peer_seed_addr, error = ?error, "failed to resolve peer seed address");
-                continue;
+            } else {
+                found_something = true;
             }
             peer_seed_addrs.push(peer_seed_addr.to_string())
         }
-        if !self.peer_seeds.is_empty() && peer_seed_addrs.is_empty() {
+        if !self.peer_seeds.is_empty() && !found_something {
             warn!("failed to resolve all the peer seed addresses")
         }
         Ok(peer_seed_addrs)

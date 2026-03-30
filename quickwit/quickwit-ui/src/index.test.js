@@ -12,15 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { render, screen } from '@testing-library/react';
-import { BrowserRouter } from 'react-router-dom';
-import App from './views/App';
+import { describe, expect, it } from "@jest/globals";
+import { render, screen } from "@testing-library/react";
+import { BrowserRouter } from "react-router";
+import App from "./views/App";
 
-describe('App', function () {
-  it('Should display side bar links', function () {
-      render(<BrowserRouter><App /></BrowserRouter>);
-      expect(screen.getByText(/Discover/)).toBeInTheDocument();
-      expect(screen.getByText(/Query editor/)).toBeInTheDocument();
-      expect(screen.getByText(/Admin/)).toBeInTheDocument();
+describe("App", () => {
+  it("Should display side bar links", () => {
+    render(
+      <BrowserRouter>
+        <App />
+      </BrowserRouter>,
+    );
+    expect(screen.getByText(/Discover/)).toBeInTheDocument();
+    expect(screen.getByText(/Query editor/)).toBeInTheDocument();
+    expect(screen.getByText(/Admin/)).toBeInTheDocument();
   });
 });

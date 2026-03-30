@@ -27,10 +27,11 @@ use quickwit_proto::types::SplitId;
 use serde::Deserialize;
 use tantivy::aggregation::agg_req::{Aggregations, get_fast_field_names};
 use tantivy::aggregation::intermediate_agg_result::IntermediateAggregationResults;
-use tantivy::aggregation::{AggregationLimitsGuard, AggregationSegmentCollector};
+use tantivy::aggregation::{AggContextParams, AggregationLimitsGuard, AggregationSegmentCollector};
 use tantivy::collector::{Collector, SegmentCollector};
 use tantivy::columnar::{ColumnType, MonotonicallyMappableToU64};
 use tantivy::fastfield::Column;
+use tantivy::tokenizer::TokenizerManager;
 use tantivy::{DateTime, DocId, Score, SegmentOrdinal, SegmentReader, TantivyError};
 
 use crate::find_trace_ids_collector::{FindTraceIdsCollector, FindTraceIdsSegmentCollector, Span};
@@ -660,21 +661,20 @@ impl QuickwitIncrementalAggregations {
     fn virtual_worst_hit(&self) -> Option<PartialHit> {
         match self {
             QuickwitIncrementalAggregations::FindTraceIdsAggregation(collector, state) => {
-                if let Some(first) = state.first() {
-                    if first.len() >= collector.num_traces {
-                        if let Some(last_elem) = first.last() {
-                            let timestamp = last_elem.span_timestamp.into_timestamp_nanos();
-                            return Some(PartialHit {
-                                sort_value: Some(SortByValue {
-                                    sort_value: Some(SortValue::I64(timestamp)),
-                                }),
-                                sort_value2: None,
-                                split_id: SplitId::new(),
-                                segment_ord: 0,
-                                doc_id: 0,
-                            });
-                        }
-                    }
+                if let Some(first) = state.first()
+                    && first.len() >= collector.num_traces
+                    && let Some(last_elem) = first.last()
+                {
+                    let timestamp = last_elem.span_timestamp.into_timestamp_nanos();
+                    return Some(PartialHit {
+                        sort_value: Some(SortByValue {
+                            sort_value: Some(SortValue::I64(timestamp)),
+                        }),
+                        sort_value2: None,
+                        split_id: SplitId::new(),
+                        segment_ord: 0,
+                        doc_id: 0,
+                    });
                 }
                 None
             }
@@ -716,7 +716,7 @@ pub struct QuickwitCollector {
     pub max_hits: usize,
     pub sort_by: SortByPair,
     pub aggregation: Option<QuickwitAggregations>,
-    pub aggregation_limits: AggregationLimitsGuard,
+    pub agg_context_params: AggContextParams,
     search_after: Option<PartialHit>,
 }
 
@@ -786,7 +786,7 @@ impl Collector for QuickwitCollector {
                         aggs,
                         segment_reader,
                         segment_ord,
-                        &self.aggregation_limits,
+                        &self.agg_context_params,
                     )?,
                 ),
             ),
@@ -861,8 +861,10 @@ impl Collector for QuickwitCollector {
     }
 }
 
-fn map_error(err: postcard::Error) -> TantivyError {
-    TantivyError::InternalError(format!("merge result Postcard error: {err}"))
+fn map_error(error: postcard::Error) -> TantivyError {
+    TantivyError::InternalError(format!(
+        "failed to merge intermediate aggregation results: Postcard error: {error}"
+    ))
 }
 
 /// Merges a set of Leaf Results.
@@ -884,24 +886,24 @@ fn merge_intermediate_aggregation_result<'a>(
             Some(serialized)
         }
         Some(QuickwitAggregations::TantivyAggregations(_)) => {
-            let fruits: Vec<IntermediateAggregationResults> = intermediate_aggregation_results
-                .map(|intermediate_aggregation_result| {
-                    postcard::from_bytes(intermediate_aggregation_result).map_err(map_error)
-                })
-                .collect::<Result<_, _>>()?;
-
-            let mut fruit_iter = fruits.into_iter();
-            if let Some(first_fruit) = fruit_iter.next() {
-                let mut merged_fruit = first_fruit;
-                for fruit in fruit_iter {
-                    merged_fruit.merge_fruits(fruit)?;
-                }
-                let serialized = postcard::to_allocvec(&merged_fruit).map_err(map_error)?;
-
-                Some(serialized)
-            } else {
-                None
-            }
+            let merged_opt = intermediate_aggregation_results
+                .map(|bytes| postcard::from_bytes(bytes).map_err(map_error))
+                .try_fold::<_, _, Result<_, TantivyError>>(
+                    None,
+                    |acc: Option<IntermediateAggregationResults>, fruits_res| {
+                        let fruits = fruits_res?;
+                        match acc {
+                            Some(mut merged_fruits) => {
+                                merged_fruits.merge_fruits(fruits)?;
+                                Ok(Some(merged_fruits))
+                            }
+                            None => Ok(Some(fruits)),
+                        }
+                    },
+                )?;
+            let serialized =
+                postcard::to_allocvec(&merged_opt.unwrap_or_default()).map_err(map_error)?;
+            Some(serialized)
         }
         None => None,
     };
@@ -1032,7 +1034,7 @@ pub(crate) fn sort_by_from_request(search_request: &SearchRequest) -> SortByPair
 pub fn make_collector_for_split(
     split_id: SplitId,
     search_request: &SearchRequest,
-    aggregation_limits: AggregationLimitsGuard,
+    agg_context_params: AggContextParams,
 ) -> crate::Result<QuickwitCollector> {
     let aggregation = match &search_request.aggregation_request {
         Some(aggregation) => Some(serde_json::from_str(aggregation)?),
@@ -1045,7 +1047,7 @@ pub fn make_collector_for_split(
         max_hits: search_request.max_hits as usize,
         sort_by,
         aggregation,
-        aggregation_limits,
+        agg_context_params,
         search_after: search_request.search_after.clone(),
     })
 }
@@ -1053,8 +1055,15 @@ pub fn make_collector_for_split(
 /// Builds a QuickwitCollector that's only useful for merging fruits.
 pub(crate) fn make_merge_collector(
     search_request: &SearchRequest,
-    aggregation_limits: &AggregationLimitsGuard,
+    agg_limits: AggregationLimitsGuard,
 ) -> crate::Result<QuickwitCollector> {
+    // Note: at this point the tokenizer manager is not used anymore by aggregations (filter query),
+    // so we can create an empty one. So if it will ever be used, it would panic.
+    let agg_context_params = AggContextParams {
+        limits: agg_limits,
+        tokenizers: TokenizerManager::new(),
+    };
+
     let aggregation = match &search_request.aggregation_request {
         Some(aggregation) => Some(serde_json::from_str(aggregation)?),
         None => None,
@@ -1066,7 +1075,7 @@ pub(crate) fn make_merge_collector(
         max_hits: search_request.max_hits as usize,
         sort_by,
         aggregation,
-        aggregation_limits: aggregation_limits.clone(),
+        agg_context_params,
         search_after: search_request.search_after.clone(),
     })
 }
@@ -1251,7 +1260,7 @@ impl IncrementalCollector {
     /// Get the worst top-hit. Can be used to skip splits if they can't possibly do better.
     ///
     /// Only returns a result if enough hits were recorded already.
-    pub(crate) fn peek_worst_hit(&self) -> Option<Cow<PartialHit>> {
+    pub(crate) fn peek_worst_hit(&self) -> Option<Cow<'_, PartialHit>> {
         if self.top_k_hits.max_len() == 0 {
             return self
                 .incremental_aggregation
@@ -1294,10 +1303,13 @@ mod tests {
         SortOrder, SortValue, SplitSearchError,
     };
     use tantivy::TantivyDocument;
+    use tantivy::aggregation::agg_req::Aggregations;
+    use tantivy::aggregation::intermediate_agg_result::IntermediateAggregationResults;
     use tantivy::collector::Collector;
 
     use super::{IncrementalCollector, make_merge_collector};
-    use crate::collector::top_k_partial_hits;
+    use crate::QuickwitAggregations;
+    use crate::collector::{merge_intermediate_aggregation_result, top_k_partial_hits};
 
     #[test]
     fn test_merge_partial_hits_no_tie() {
@@ -1744,7 +1756,7 @@ mod tests {
         request: &SearchRequest,
         results: Vec<LeafSearchResponse>,
     ) -> LeafSearchResponse {
-        let collector = make_merge_collector(request, &Default::default()).unwrap();
+        let collector = make_merge_collector(request, Default::default()).unwrap();
         let mut incremental_collector = IncrementalCollector::new(collector.clone());
 
         let result = collector
@@ -2002,5 +2014,23 @@ mod tests {
             }
         );
         // TODO would be nice to test aggregation too.
+    }
+
+    #[test]
+    fn test_merge_empty_intermediate_aggregation_result() {
+        let merged = merge_intermediate_aggregation_result(&None, std::iter::empty()).unwrap();
+        assert!(merged.is_none());
+
+        let aggregations_json = r#"{
+            "avg_price": { "avg": { "field": "price" } }
+        }"#;
+        let ttv_aggregations: Aggregations = serde_json::from_str(aggregations_json).unwrap();
+        let qw_aggregations = QuickwitAggregations::TantivyAggregations(ttv_aggregations);
+        let serialized =
+            merge_intermediate_aggregation_result(&Some(qw_aggregations), std::iter::empty())
+                .unwrap()
+                .unwrap();
+        let _merged: IntermediateAggregationResults = postcard::from_bytes(&serialized).unwrap();
+        // Hopefully `_merged` is empty but the API does not allow us to assert that.
     }
 }

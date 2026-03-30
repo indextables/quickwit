@@ -59,7 +59,7 @@ use itertools::Itertools;
 use once_cell::sync::Lazy;
 use quickwit_actors::{ActorExitStatus, Mailbox, SpawnContext, Universe};
 use quickwit_cluster::{
-    Cluster, ClusterChange, ClusterChangeStream, ListenerHandle, start_cluster_service,
+    Cluster, ClusterChange, ClusterChangeStream, ClusterNode, ListenerHandle, start_cluster_service,
 };
 use quickwit_common::pubsub::{EventBroker, EventSubscriptionHandle};
 use quickwit_common::rate_limiter::RateLimiterSettings;
@@ -82,8 +82,10 @@ use quickwit_indexing::models::ShardPositionsService;
 use quickwit_indexing::start_indexing_service;
 use quickwit_ingest::{
     GetMemoryCapacity, IngestRequest, IngestRouter, IngestServiceClient, Ingester, IngesterPool,
-    LocalShardsUpdate, get_idle_shard_timeout, setup_local_shards_update_listener,
-    start_ingest_api_service, wait_for_ingester_decommission, wait_for_ingester_status,
+    IngesterPoolEntry, LocalShardsUpdate, get_idle_shard_timeout,
+    setup_ingester_capacity_update_listener, setup_local_shards_update_listener,
+    start_ingest_api_service, try_get_ingester_status, wait_for_ingester_decommission,
+    wait_for_ingester_status,
 };
 use quickwit_jaeger::JaegerService;
 use quickwit_janitor::{JanitorService, start_janitor_service};
@@ -112,6 +114,7 @@ use quickwit_search::{
 use quickwit_storage::{SplitCache, StorageResolver};
 use tcp_listener::TcpListenerResolver;
 use tokio::sync::oneshot;
+use tonic::codec::CompressionEncoding;
 use tonic_health::ServingStatus;
 use tonic_health::server::HealthReporter;
 use tower::ServiceBuilder;
@@ -148,6 +151,7 @@ fn get_metastore_client_max_concurrency() -> usize {
     quickwit_common::get_from_env(
         METASTORE_CLIENT_MAX_CONCURRENCY_ENV_KEY,
         DEFAULT_METASTORE_CLIENT_MAX_CONCURRENCY,
+        false,
     )
 }
 
@@ -255,11 +259,6 @@ async fn balance_channel_for_service(
         })
     });
     BalanceChannel::from_stream(service_change_stream)
-}
-
-fn convert_status_code_to_legacy_http(status_code: http::StatusCode) -> warp::http::StatusCode {
-    warp::http::StatusCode::from_u16(status_code.as_u16())
-        .unwrap_or(warp::http::StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 async fn start_ingest_client_if_needed(
@@ -383,13 +382,12 @@ fn start_shard_positions_service(
     // We spawn a task here, because we need the ingester to be ready before spawning the
     // the `ShardPositionsService`. If we don't, all the events we emit too early will be dismissed.
     tokio::spawn(async move {
-        if let Some(ingester) = ingester_opt {
-            if wait_for_ingester_status(ingester, IngesterStatus::Ready)
+        if let Some(ingester) = &ingester_opt
+            && wait_for_ingester_status(ingester, IngesterStatus::Ready, Duration::from_secs(300))
                 .await
                 .is_err()
-            {
-                warn!("ingester failed to reach ready status");
-            }
+        {
+            warn!("ingester failed to reach ready status");
         }
         ShardPositionsService::spawn(&spawn_ctx, event_broker, cluster);
     });
@@ -411,10 +409,10 @@ async fn shutdown_signal_handler(
     shutdown_signal.await;
     // We must decommission the ingester first before terminating the indexing pipelines that
     // may consume from it. We also need to keep the gRPC server running while doing so.
-    if let Some(ingester) = ingester_opt {
-        if let Err(error) = wait_for_ingester_decommission(ingester).await {
-            error!("failed to decommission ingester gracefully: {:?}", error);
-        }
+    if let Some(ingester) = &ingester_opt
+        && let Err(error) = wait_for_ingester_decommission(ingester, Duration::from_secs(300)).await
+    {
+        error!("failed to decommission ingester gracefully: {:?}", error);
     }
     let actor_exit_statuses = universe.quit().await;
 
@@ -561,10 +559,10 @@ pub async fn serve_quickwit(
 
     // Setup the indexer pool to track cluster changes.
     setup_indexer_pool(
-        &node_config,
         cluster.change_stream(),
-        indexer_pool,
         indexing_service_opt.clone(),
+        indexer_pool,
+        node_config.grpc_config.max_message_size,
     );
 
     // Setup ingest service v2.
@@ -635,10 +633,38 @@ pub async fn serve_quickwit(
             None
         };
 
-    let searcher_context = Arc::new(SearcherContext::new(
-        node_config.searcher_config.clone(),
-        split_cache_opt,
-    ));
+    // Initialize Lambda invoker if enabled and searcher service is running
+    let searcher_context = if node_config.is_service_enabled(QuickwitService::Searcher) {
+        if let Some(lambda_config) = &node_config.searcher_config.lambda {
+            #[cfg(feature = "lambda")]
+            {
+                info!("initializing AWS Lambda invoker for search");
+                warn!("offloading to lambda is EXPERIMENTAL. Use at your own risk");
+                let invoker =
+                    quickwit_lambda_client::try_get_or_deploy_invoker(lambda_config).await?;
+                Arc::new(SearcherContext::new(
+                    node_config.searcher_config.clone(),
+                    split_cache_opt,
+                    Some(invoker),
+                ))
+            }
+            #[cfg(not(feature = "lambda"))]
+            {
+                let _ = lambda_config;
+                bail!("lambda support is statically disabled, but enabled in configuration");
+            }
+        } else {
+            Arc::new(SearcherContext::new_without_invoker(
+                node_config.searcher_config.clone(),
+                split_cache_opt,
+            ))
+        }
+    } else {
+        Arc::new(SearcherContext::new_without_invoker(
+            node_config.searcher_config.clone(),
+            split_cache_opt,
+        ))
+    };
 
     let (search_job_placer, search_service) = setup_searcher(
         &node_config,
@@ -909,8 +935,12 @@ async fn setup_ingest_v2(
         ingester_pool.clone(),
         replication_factor,
         event_broker.clone(),
+        node_config.availability_zone.clone(),
     );
     ingest_router.subscribe();
+    setup_ingester_capacity_update_listener(cluster.clone(), event_broker.clone())
+        .await
+        .forever();
 
     let ingest_router_service = IngestRouterServiceClient::tower()
         .stack_layer(INGEST_GRPC_SERVER_METRICS_LAYER.clone())
@@ -953,64 +983,128 @@ async fn setup_ingest_v2(
     } else {
         None
     };
-    // Setup ingester pool change stream.
-    let ingester_opt_clone = ingester_opt.clone();
-    let max_message_size = node_config.grpc_config.max_message_size;
-    let ingester_change_stream = cluster.change_stream().filter_map(move |cluster_change| {
-        let ingester_opt_clone_clone = ingester_opt_clone.clone();
+    setup_ingester_pool(
+        cluster.change_stream(),
+        ingester_opt.clone(),
+        ingester_pool,
+        grpc_compression_encoding_opt,
+        node_config.grpc_config.max_message_size,
+    );
+    Ok((ingest_router, ingest_router_service, ingester_opt))
+}
+
+fn setup_ingester_pool(
+    cluster_change_stream: ClusterChangeStream,
+    ingester_opt: Option<Ingester>,
+    ingester_pool: IngesterPool,
+    grpc_compression_encoding_opt: Option<CompressionEncoding>,
+    grpc_max_message_size: ByteSize,
+) {
+    let ingester_change_stream = cluster_change_stream.filter_map(move |cluster_change| {
+        let ingester_opt_clone = ingester_opt.clone();
         Box::pin(async move {
             match cluster_change {
                 ClusterChange::Add(node) if node.is_indexer() => {
-                    let chitchat_id = node.chitchat_id();
-                    info!(
-                        node_id = chitchat_id.node_id,
-                        generation_id = chitchat_id.generation_id,
-                        "adding node `{}` to ingester pool",
-                        chitchat_id.node_id,
+                    let change = build_ingester_insert_change(
+                        &node,
+                        ingester_opt_clone,
+                        grpc_max_message_size,
+                        grpc_compression_encoding_opt,
                     );
-                    let node_id: NodeId = node.node_id().into();
-
-                    if node.is_self_node() {
-                        // Here, since the service is available locally, we bypass the network stack
-                        // and use the instance directly. However, we still want client-side
-                        // metrics, so we use both metrics layers.
-                        let ingester = ingester_opt_clone_clone
-                            .expect("ingester service should be initialized");
-                        let ingester_service = ingester_service_layer_stack(
-                            IngesterServiceClient::tower()
-                                .stack_layer(INGEST_GRPC_CLIENT_METRICS_LAYER.clone()),
-                        )
-                        .build(ingester);
-                        Some(Change::Insert(node_id, ingester_service))
-                    } else {
-                        let ingester_service = IngesterServiceClient::tower()
-                            .stack_layer(INGEST_GRPC_CLIENT_METRICS_LAYER.clone())
-                            .stack_layer(TimeoutLayer::new(GRPC_INGESTER_SERVICE_TIMEOUT))
-                            .build_from_channel(
-                                node.grpc_advertise_addr(),
-                                node.channel(),
-                                max_message_size,
-                                grpc_compression_encoding_opt,
-                            );
-                        Some(Change::Insert(node_id, ingester_service))
-                    }
+                    Some(change)
+                }
+                // only update the ingester pool when the ingester status changes, to avoid
+                // unnecessary churn
+                ClusterChange::Update { previous, updated }
+                    if updated.is_indexer()
+                        && previous.ingester_status() != updated.ingester_status() =>
+                {
+                    let change = build_ingester_insert_change(
+                        &updated,
+                        ingester_opt_clone,
+                        grpc_max_message_size,
+                        grpc_compression_encoding_opt,
+                    );
+                    Some(change)
                 }
                 ClusterChange::Remove(node) if node.is_indexer() => {
-                    let chitchat_id = node.chitchat_id();
-                    info!(
-                        node_id = chitchat_id.node_id,
-                        generation_id = chitchat_id.generation_id,
-                        "removing node `{}` from ingester pool",
-                        chitchat_id.node_id,
-                    );
-                    Some(Change::Remove(node.node_id().into()))
+                    let change = build_ingester_remove_change(&node);
+                    Some(change)
                 }
                 _ => None,
             }
         })
     });
     ingester_pool.listen_for_changes(ingester_change_stream);
-    Ok((ingest_router, ingest_router_service, ingester_opt))
+}
+
+fn build_ingester_insert_change(
+    node: &ClusterNode,
+    ingester_opt: Option<impl IngesterService>,
+    grpc_max_message_size: ByteSize,
+    grpc_compression_encoding_opt: Option<CompressionEncoding>,
+) -> Change<NodeId, IngesterPoolEntry> {
+    let chitchat_id = node.chitchat_id();
+    info!(
+        node_id = chitchat_id.node_id,
+        generation_id = chitchat_id.generation_id,
+        "adding/updating node `{}` with ingester status `{}` to ingester pool",
+        chitchat_id.node_id,
+        node.ingester_status(),
+    );
+    let node_id: NodeId = node.node_id().into();
+    let ingester_service = build_ingester_service(
+        node,
+        ingester_opt,
+        grpc_max_message_size,
+        grpc_compression_encoding_opt,
+    );
+    let pool_entry = IngesterPoolEntry {
+        client: ingester_service,
+        status: node.ingester_status(),
+        availability_zone: node.availability_zone().map(|az| az.to_string()),
+    };
+    Change::Insert(node_id, pool_entry)
+}
+
+fn build_ingester_remove_change(node: &ClusterNode) -> Change<NodeId, IngesterPoolEntry> {
+    let chitchat_id = node.chitchat_id();
+    info!(
+        node_id = chitchat_id.node_id,
+        generation_id = chitchat_id.generation_id,
+        "removing node `{}` from ingester pool",
+        chitchat_id.node_id,
+    );
+    let node_id: NodeId = node.node_id().into();
+    Change::Remove(node_id)
+}
+
+fn build_ingester_service(
+    node: &ClusterNode,
+    ingester_opt: Option<impl IngesterService>,
+    max_message_size: ByteSize,
+    grpc_compression_encoding_opt: Option<CompressionEncoding>,
+) -> IngesterServiceClient {
+    if node.is_self_node() {
+        // Here, since the service is available locally, we bypass the network stack
+        // and use the instance directly. However, we still want client-side
+        // metrics, so we use both metrics layers.
+        let ingester = ingester_opt.expect("ingester service should be initialized");
+        let service = ingester_service_layer_stack(
+            IngesterServiceClient::tower().stack_layer(INGEST_GRPC_CLIENT_METRICS_LAYER.clone()),
+        )
+        .build(ingester);
+        return service;
+    }
+    IngesterServiceClient::tower()
+        .stack_layer(INGEST_GRPC_CLIENT_METRICS_LAYER.clone())
+        .stack_layer(TimeoutLayer::new(GRPC_INGESTER_SERVICE_TIMEOUT))
+        .build_from_channel(
+            node.grpc_advertise_addr(),
+            node.channel(),
+            max_message_size,
+            grpc_compression_encoding_opt,
+        )
 }
 
 async fn setup_searcher(
@@ -1022,6 +1116,7 @@ async fn setup_searcher(
 ) -> anyhow::Result<(SearchJobPlacer, Arc<dyn SearchService>)> {
     let searcher_pool = SearcherPool::default();
     let search_job_placer = SearchJobPlacer::new(searcher_pool.clone());
+
     let search_service = start_searcher_service(
         metastore,
         storage_resolver,
@@ -1133,96 +1228,101 @@ async fn setup_control_plane(
 }
 
 fn setup_indexer_pool(
-    node_config: &NodeConfig,
     cluster_change_stream: ClusterChangeStream,
-    indexer_pool: IndexerPool,
     indexing_service_opt: Option<Mailbox<IndexingService>>,
+    indexer_pool: IndexerPool,
+    grpc_max_message_size: ByteSize,
 ) {
-    let max_message_size = node_config.grpc_config.max_message_size;
     let indexer_change_stream = cluster_change_stream.filter_map(move |cluster_change| {
         let indexing_service_clone_opt = indexing_service_opt.clone();
         Box::pin(async move {
-            match &cluster_change {
-                ClusterChange::Add(node) if node.is_indexer() => {
-                    let chitchat_id = node.chitchat_id();
-                    info!(
-                        node_id = chitchat_id.node_id,
-                        generation_id = chitchat_id.generation_id,
-                        "adding node `{}` to indexer pool",
-                        chitchat_id.node_id,
-                    );
-                }
-                _ => {}
-            };
             match cluster_change {
-                ClusterChange::Add(node) | ClusterChange::Update(node) if node.is_indexer() => {
-                    let node_id = node.node_id().to_owned();
-                    let indexing_tasks = node.indexing_tasks().to_vec();
-                    let indexing_capacity = node.indexing_capacity();
-
-                    if node.is_self_node() {
-                        // Here, since the service is available locally, we bypass the network stack
-                        // and use the mailbox directly. However, we still want client-side metrics,
-                        // so we use both metrics layers.
-                        let indexing_service_mailbox = indexing_service_clone_opt
-                            .expect("indexing service should be initialized");
-                        // These layers apply to all the RPCs of the indexing service.
-                        let shared_layers = ServiceBuilder::new()
-                            .layer(INDEXING_GRPC_CLIENT_METRICS_LAYER.clone())
-                            .layer(INDEXING_GRPC_SERVER_METRICS_LAYER.clone())
-                            .into_inner();
-                        let client = IndexingServiceClient::tower()
-                            .stack_layer(shared_layers)
-                            .build_from_mailbox(indexing_service_mailbox);
-                        let change = Change::Insert(
-                            node_id.clone(),
-                            IndexerNodeInfo {
-                                node_id,
-                                generation_id: node.chitchat_id().generation_id,
-                                client,
-                                indexing_tasks,
-                                indexing_capacity,
-                            },
-                        );
-                        Some(change)
-                    } else {
-                        let client = IndexingServiceClient::tower()
-                            .stack_layer(INDEXING_GRPC_CLIENT_METRICS_LAYER.clone())
-                            .stack_layer(TimeoutLayer::new(GRPC_INDEXING_SERVICE_TIMEOUT))
-                            .build_from_channel(
-                                node.grpc_advertise_addr(),
-                                node.channel(),
-                                max_message_size,
-                                None,
-                            );
-                        let change = Change::Insert(
-                            node_id.clone(),
-                            IndexerNodeInfo {
-                                node_id,
-                                generation_id: node.chitchat_id().generation_id,
-                                client,
-                                indexing_tasks,
-                                indexing_capacity,
-                            },
-                        );
-                        Some(change)
-                    }
+                ClusterChange::Add(node) if node.is_indexer() => {
+                    let change = build_indexer_insert_change(
+                        &node,
+                        indexing_service_clone_opt,
+                        grpc_max_message_size,
+                    );
+                    Some(change)
                 }
                 ClusterChange::Remove(node) if node.is_indexer() => {
-                    let chitchat_id = node.chitchat_id();
-                    info!(
-                        node_id = chitchat_id.node_id,
-                        generation_id = chitchat_id.generation_id,
-                        "removing node `{}` from indexer pool",
-                        chitchat_id.node_id,
-                    );
-                    Some(Change::Remove(node.node_id().to_owned()))
+                    let change = build_indexer_remove_change(&node);
+                    Some(change)
                 }
                 _ => None,
             }
         })
     });
     indexer_pool.listen_for_changes(indexer_change_stream);
+}
+
+fn build_indexer_insert_change(
+    node: &ClusterNode,
+    indexing_service_opt: Option<Mailbox<IndexingService>>,
+    grpc_max_message_size: ByteSize,
+) -> Change<NodeId, IndexerNodeInfo> {
+    let chitchat_id = node.chitchat_id();
+    info!(
+        node_id = chitchat_id.node_id,
+        generation_id = chitchat_id.generation_id,
+        "adding node `{}` with ingester status `{}` to indexer pool",
+        chitchat_id.node_id,
+        node.ingester_status()
+    );
+    let node_id: NodeId = node.node_id().into();
+    let client = build_indexing_service(node, indexing_service_opt, grpc_max_message_size);
+    Change::Insert(
+        node_id.clone(),
+        IndexerNodeInfo {
+            node_id,
+            generation_id: chitchat_id.generation_id,
+            client,
+            indexing_tasks: node.indexing_tasks().to_vec(),
+            indexing_capacity: node.indexing_capacity(),
+        },
+    )
+}
+
+fn build_indexer_remove_change(node: &ClusterNode) -> Change<NodeId, IndexerNodeInfo> {
+    let chitchat_id = node.chitchat_id();
+    info!(
+        node_id = chitchat_id.node_id,
+        generation_id = chitchat_id.generation_id,
+        "removing node `{}` from indexer pool",
+        chitchat_id.node_id,
+    );
+    let node_id: NodeId = node.node_id().into();
+    Change::Remove(node_id)
+}
+
+fn build_indexing_service(
+    node: &ClusterNode,
+    indexing_service_opt: Option<Mailbox<IndexingService>>,
+    max_message_size: ByteSize,
+) -> IndexingServiceClient {
+    if node.is_self_node() {
+        // Here, since the service is available locally, we bypass the network stack
+        // and use the mailbox directly. However, we still want client-side metrics,
+        // so we use both metrics layers.
+        let indexing_service_mailbox =
+            indexing_service_opt.expect("indexing service should be initialized");
+        let shared_layers = ServiceBuilder::new()
+            .layer(INDEXING_GRPC_CLIENT_METRICS_LAYER.clone())
+            .layer(INDEXING_GRPC_SERVER_METRICS_LAYER.clone())
+            .into_inner();
+        return IndexingServiceClient::tower()
+            .stack_layer(shared_layers)
+            .build_from_mailbox(indexing_service_mailbox);
+    }
+    IndexingServiceClient::tower()
+        .stack_layer(INDEXING_GRPC_CLIENT_METRICS_LAYER.clone())
+        .stack_layer(TimeoutLayer::new(GRPC_INDEXING_SERVICE_TIMEOUT))
+        .build_from_channel(
+            node.grpc_advertise_addr(),
+            node.channel(),
+            max_message_size,
+            None,
+        )
 }
 
 fn require<T: Clone + Send>(
@@ -1273,19 +1373,12 @@ async fn node_readiness_reporting_task(
     };
     info!("REST server is ready");
 
-    if let Some(ingester) = ingester_opt {
-        if let Err(error) = wait_for_ingester_status(ingester, IngesterStatus::Ready).await {
-            error!("failed to initialize ingester: {:?}", error);
-            info!("shutting down");
-            return;
-        }
-    }
     let mut interval = tokio::time::interval(READINESS_REPORTING_INTERVAL);
 
     loop {
         interval.tick().await;
 
-        let new_node_ready = match metastore.check_connectivity().await {
+        let metastore_is_available = match metastore.check_connectivity().await {
             Ok(()) => {
                 debug!(metastore_endpoints=?metastore.endpoints(), "metastore service is available");
                 true
@@ -1295,6 +1388,23 @@ async fn node_readiness_reporting_task(
                 false
             }
         };
+        let ingester_is_available = if let Some(ingester) = &ingester_opt {
+            match try_get_ingester_status(ingester).await {
+                Ok(status) => {
+                    status == IngesterStatus::Initializing || status != IngesterStatus::Failed
+                }
+                Err(error) => {
+                    // If we couldn't get the ingester status, it's not looking good, so we set the
+                    // node to not ready.
+                    error!(%error, "failed to get ingester status");
+                    false
+                }
+            }
+        } else {
+            true
+        };
+        let new_node_ready = metastore_is_available && ingester_is_available;
+
         if new_node_ready != node_ready {
             node_ready = new_node_ready;
             cluster.set_self_node_readiness(node_ready).await;
@@ -1355,30 +1465,15 @@ async fn check_cluster_configuration(
     Ok(())
 }
 
-pub mod lambda_search_api {
-    pub use crate::elasticsearch_api::{
-        es_compat_cat_indices_handler, es_compat_index_cat_indices_handler,
-        es_compat_index_count_handler, es_compat_index_field_capabilities_handler,
-        es_compat_index_multi_search_handler, es_compat_index_search_handler,
-        es_compat_index_stats_handler, es_compat_resolve_index_handler, es_compat_scroll_handler,
-        es_compat_search_handler, es_compat_stats_handler,
-    };
-    pub use crate::index_api::get_index_metadata_handler;
-    pub use crate::rest::recover_fn;
-    pub use crate::search_api::{search_get_handler, search_post_handler};
-}
-
 #[cfg(test)]
 mod tests {
     use quickwit_cluster::{ChannelTransport, ClusterNode, create_cluster_for_test};
-    use quickwit_common::ServiceStream;
     use quickwit_common::uri::Uri;
+    use quickwit_common::{ServiceStream, assert_eventually};
     use quickwit_config::SearcherConfig;
     use quickwit_metastore::{IndexMetadata, metastore_for_test};
-    use quickwit_proto::indexing::IndexingTask;
     use quickwit_proto::ingest::ingester::{MockIngesterService, ObservationMessage};
     use quickwit_proto::metastore::{ListIndexesMetadataResponse, MockMetastoreService};
-    use quickwit_proto::types::{IndexUid, PipelineUid};
     use quickwit_search::Job;
     use tokio::sync::watch;
     use tonic::transport::{Channel, Server};
@@ -1490,16 +1585,14 @@ mod tests {
 
         metastore_readiness_tx.send(true).unwrap();
         ingester_status_tx.send(IngesterStatus::Ready).unwrap();
-        tokio::time::sleep(Duration::from_millis(25)).await;
-        assert!(cluster.is_self_node_ready().await);
+        assert_eventually!(cluster.is_self_node_ready().await);
 
         let request = tonic::Request::new(HealthCheckRequest::default());
         let response = health_client.check(request).await.unwrap().into_inner();
         assert_eq!(response.status(), ServingStatus::Serving.into());
 
         metastore_readiness_tx.send(false).unwrap();
-        tokio::time::sleep(Duration::from_millis(25)).await;
-        assert!(!cluster.is_self_node_ready().await);
+        assert_eventually!(!cluster.is_self_node_ready().await);
 
         let request = tonic::Request::new(HealthCheckRequest::default());
         let response = health_client.check(request).await.unwrap().into_inner();
@@ -1517,53 +1610,32 @@ mod tests {
             ClusterChangeStream::new_unbounded();
         let indexer_pool = IndexerPool::default();
         setup_indexer_pool(
-            &node_config,
             cluster_change_stream,
-            indexer_pool.clone(),
             Some(indexing_service_mailbox),
+            indexer_pool.clone(),
+            node_config.grpc_config.max_message_size,
         );
 
-        let new_indexer_node =
-            ClusterNode::for_test("test-indexer-node", 1, true, &["indexer"], &[]).await;
+        // adding a indexer node refreshes the indexer pool
+        let new_indexer_node = ClusterNode::for_test(
+            "test-indexer-node",
+            1,
+            true,
+            &["indexer"],
+            &[],
+            IngesterStatus::Ready,
+        )
+        .await;
         cluster_change_stream_tx
-            .send(ClusterChange::Add(new_indexer_node))
+            .send(ClusterChange::Add(new_indexer_node.clone()))
             .unwrap();
         tokio::time::sleep(Duration::from_millis(1)).await;
 
         assert_eq!(indexer_pool.len(), 1);
 
-        let new_indexer_node_info = indexer_pool.get("test-indexer-node").unwrap();
-        assert!(new_indexer_node_info.indexing_tasks.is_empty());
-
-        let new_indexing_task = IndexingTask {
-            pipeline_uid: Some(PipelineUid::for_test(0u128)),
-            index_uid: Some(IndexUid::for_test("test-index", 0)),
-            source_id: "test-source".to_string(),
-            shard_ids: Vec::new(),
-            params_fingerprint: 0,
-        };
-        let updated_indexer_node = ClusterNode::for_test(
-            "test-indexer-node",
-            1,
-            true,
-            &["indexer"],
-            &[new_indexing_task.clone()],
-        )
-        .await;
+        // removing an indexer node refreshes the indexer pool
         cluster_change_stream_tx
-            .send(ClusterChange::Update(updated_indexer_node.clone()))
-            .unwrap();
-        tokio::time::sleep(Duration::from_millis(1)).await;
-
-        let updated_indexer_node_info = indexer_pool.get("test-indexer-node").unwrap();
-        assert_eq!(updated_indexer_node_info.indexing_tasks.len(), 1);
-        assert_eq!(
-            updated_indexer_node_info.indexing_tasks[0],
-            new_indexing_task
-        );
-
-        cluster_change_stream_tx
-            .send(ClusterChange::Remove(updated_indexer_node))
+            .send(ClusterChange::Remove(new_indexer_node))
             .unwrap();
         tokio::time::sleep(Duration::from_millis(1)).await;
 
@@ -1573,7 +1645,10 @@ mod tests {
     #[tokio::test]
     async fn test_setup_searcher() {
         let node_config = NodeConfig::for_test();
-        let searcher_context = Arc::new(SearcherContext::new(SearcherConfig::default(), None));
+        let searcher_context = Arc::new(SearcherContext::new_without_invoker(
+            SearcherConfig::default(),
+            None,
+        ));
         let metastore = metastore_for_test();
         let (change_stream, change_stream_tx) = ClusterChangeStream::new_unbounded();
         let storage_resolver = StorageResolver::unconfigured();
@@ -1603,7 +1678,15 @@ mod tests {
             .await
             .unwrap_err();
 
-        let self_node = ClusterNode::for_test("node-1", 1337, true, &["searcher"], &[]).await;
+        let self_node = ClusterNode::for_test(
+            "node-1",
+            1337,
+            true,
+            &["searcher"],
+            &[],
+            IngesterStatus::Ready,
+        )
+        .await;
         change_stream_tx
             .send(ClusterChange::Add(self_node.clone()))
             .unwrap();
@@ -1619,7 +1702,15 @@ mod tests {
             .send(ClusterChange::Remove(self_node))
             .unwrap();
 
-        let node = ClusterNode::for_test("node-1", 1337, false, &["searcher"], &[]).await;
+        let node = ClusterNode::for_test(
+            "node-1",
+            1337,
+            false,
+            &["searcher"],
+            &[],
+            IngesterStatus::Ready,
+        )
+        .await;
         change_stream_tx.send(ClusterChange::Add(node)).unwrap();
         tokio::time::sleep(Duration::from_millis(1)).await;
 
@@ -1628,5 +1719,97 @@ mod tests {
             .await
             .unwrap();
         assert!(!searcher_client.is_local());
+    }
+
+    #[tokio::test]
+    async fn test_setup_ingester_pool() {
+        let (cluster_change_stream, cluster_change_stream_tx) =
+            ClusterChangeStream::new_unbounded();
+        let ingester_pool = IngesterPool::default();
+        setup_ingester_pool(
+            cluster_change_stream,
+            None::<Ingester>,
+            ingester_pool.clone(),
+            None,
+            ByteSize::mib(20),
+        );
+
+        // Add an indexer node with IngesterStatus::Initializing.
+        let new_node = ClusterNode::for_test(
+            "test-ingester-node",
+            1,
+            false,
+            &["indexer"],
+            &[],
+            IngesterStatus::Initializing,
+        )
+        .await;
+        cluster_change_stream_tx
+            .send(ClusterChange::Add(new_node.clone()))
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(1)).await;
+
+        assert_eq!(ingester_pool.len(), 1);
+        let pool_entry = ingester_pool
+            .get(&NodeId::from("test-ingester-node"))
+            .unwrap();
+        assert_eq!(pool_entry.status, IngesterStatus::Initializing);
+
+        // Update the node: ingester status transitions from Initializing to Ready.
+        let updated_node = ClusterNode::for_test(
+            "test-ingester-node",
+            1,
+            false,
+            &["indexer"],
+            &[],
+            IngesterStatus::Ready,
+        )
+        .await;
+        cluster_change_stream_tx
+            .send(ClusterChange::Update {
+                previous: new_node.clone(),
+                updated: updated_node.clone(),
+            })
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(1)).await;
+
+        assert_eq!(ingester_pool.len(), 1);
+        let pool_entry = ingester_pool
+            .get(&NodeId::from("test-ingester-node"))
+            .unwrap();
+        assert_eq!(pool_entry.status, IngesterStatus::Ready);
+
+        // Update the node: ingester status transitions from Ready to Decommissioning.
+        let updated_node_2 = ClusterNode::for_test(
+            "test-ingester-node",
+            1,
+            false,
+            &["indexer"],
+            &[],
+            IngesterStatus::Decommissioning,
+        )
+        .await;
+        cluster_change_stream_tx
+            .send(ClusterChange::Update {
+                previous: updated_node.clone(),
+                updated: updated_node_2.clone(),
+            })
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(1)).await;
+
+        // The node should still be in the pool with updated status.
+        assert_eq!(ingester_pool.len(), 1);
+        let pool_entry = ingester_pool
+            .get(&NodeId::from("test-ingester-node"))
+            .unwrap();
+        assert_eq!(pool_entry.status, IngesterStatus::Decommissioning);
+
+        // Remove the node.
+        cluster_change_stream_tx
+            .send(ClusterChange::Remove(updated_node))
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(1)).await;
+
+        assert!(ingester_pool.is_empty());
     }
 }
