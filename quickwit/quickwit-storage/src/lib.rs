@@ -69,9 +69,9 @@ pub use self::local_file_storage::{LocalFileStorage, LocalFileStorageFactory};
 #[cfg(feature = "azure")]
 pub use self::object_storage::{AzureBlobStorage, AzureBlobStorageFactory};
 pub use self::object_storage::{
-    MultiPartPolicy, S3CompatibleObjectStorage, S3CompatibleObjectStorageFactory,
-    OBJECT_STORAGE_REQUEST_COUNT, OBJECT_STORAGE_BYTES_FETCHED,
-    get_object_storage_request_count, get_object_storage_bytes_fetched, reset_object_storage_request_stats,
+    MultiPartPolicy, OBJECT_STORAGE_BYTES_FETCHED, OBJECT_STORAGE_REQUEST_COUNT,
+    S3CompatibleObjectStorage, S3CompatibleObjectStorageFactory, get_object_storage_bytes_fetched,
+    get_object_storage_request_count, reset_object_storage_request_stats,
 };
 #[cfg(feature = "gcs")]
 pub use self::opendal_storage::GoogleCloudStorageFactory;

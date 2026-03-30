@@ -73,7 +73,9 @@ pub struct DeleteSplitsError {
 }
 
 async fn protect_future<Fut, T>(progress: Option<&Progress>, future: Fut) -> T
-where Fut: Future<Output = T> {
+where
+    Fut: Future<Output = T>,
+{
     match progress {
         None => future.await,
         Some(progress) => {

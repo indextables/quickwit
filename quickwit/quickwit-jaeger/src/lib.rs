@@ -1074,7 +1074,9 @@ fn collect_trace_ids(
 
 #[allow(clippy::result_large_err)]
 fn json_deserialize<'a, T>(json: &'a str, label: &'static str) -> Result<T, Status>
-where T: Deserialize<'a> {
+where
+    T: Deserialize<'a>,
+{
     match serde_json::from_str(json) {
         Ok(deserialized) => Ok(deserialized),
         Err(error) => {
@@ -1088,7 +1090,9 @@ where T: Deserialize<'a> {
 
 #[allow(clippy::result_large_err)]
 fn postcard_deserialize<'a, T>(json: &'a [u8], label: &'static str) -> Result<T, Status>
-where T: Deserialize<'a> {
+where
+    T: Deserialize<'a>,
+{
     match postcard::from_bytes(json) {
         Ok(deserialized) => Ok(deserialized),
         Err(error) => {

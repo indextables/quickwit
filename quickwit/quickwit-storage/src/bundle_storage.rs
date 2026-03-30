@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use quickwit_common::tantivy4java_debug;
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fmt::Debug;
@@ -19,7 +20,6 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::{fmt, io};
-use quickwit_common::tantivy4java_debug;
 
 use anyhow::Context;
 use async_trait::async_trait;
@@ -76,14 +76,19 @@ impl BundleStorage {
     ) -> anyhow::Result<(FileSlice, Self)> {
         tantivy4java_debug!("🔍 QUICKWIT DEBUG: BundleStorage::open_from_split_data called");
         tantivy4java_debug!("🔍 QUICKWIT DEBUG: Bundle filepath: {:?}", bundle_filepath);
-        tantivy4java_debug!("🔍 QUICKWIT DEBUG: Split data size: {} bytes", split_data.len());
+        tantivy4java_debug!(
+            "🔍 QUICKWIT DEBUG: Split data size: {} bytes",
+            split_data.len()
+        );
         tantivy4java_debug!("🔍 QUICKWIT DEBUG: Storage URI: {}", storage.uri());
-        
+
         let (hotcache, metadata) = BundleStorageFileOffsets::open_from_split_data(split_data)?;
-        
-        tantivy4java_debug!("🔍 QUICKWIT DEBUG: BundleStorageFileOffsets::open_from_split_data completed");
+
+        tantivy4java_debug!(
+            "🔍 QUICKWIT DEBUG: BundleStorageFileOffsets::open_from_split_data completed"
+        );
         tantivy4java_debug!("🔍 QUICKWIT DEBUG: Hotcache size: {} bytes", hotcache.len());
-        
+
         Ok((
             hotcache,
             BundleStorage {
@@ -149,9 +154,14 @@ impl BundleStorageFileOffsets {
     /// [Files, FileMetadata, FileMetadata Len, HotCache, HotCache Len]
     /// Returns (Hotcache, Self)
     fn open_from_split_data(file: FileSlice) -> anyhow::Result<(FileSlice, Self)> {
-        tantivy4java_debug!("🔍 QUICKWIT DEBUG: BundleStorageFileOffsets::open_from_split_data called");
-        tantivy4java_debug!("🔍 QUICKWIT DEBUG: Input file slice size: {} bytes", file.len());
-        
+        tantivy4java_debug!(
+            "🔍 QUICKWIT DEBUG: BundleStorageFileOffsets::open_from_split_data called"
+        );
+        tantivy4java_debug!(
+            "🔍 QUICKWIT DEBUG: Input file slice size: {} bytes",
+            file.len()
+        );
+
         let (bundle_and_hotcache_bytes, hotcache_num_bytes_data) =
             file.split_from_end(SPLIT_HOTBYTES_FOOTER_LENGTH_NUM_BYTES);
         let hotcache_num_bytes: u32 = u32::from_le_bytes(
@@ -161,16 +171,28 @@ impl BundleStorageFileOffsets {
                 .try_into()
                 .unwrap(),
         );
-        
-        tantivy4java_debug!("🔍 QUICKWIT DEBUG: Hotcache num bytes read from footer: {}", hotcache_num_bytes);
-        tantivy4java_debug!("🔍 QUICKWIT DEBUG: Bundle and hotcache bytes size: {}", bundle_and_hotcache_bytes.len());
-        
+
+        tantivy4java_debug!(
+            "🔍 QUICKWIT DEBUG: Hotcache num bytes read from footer: {}",
+            hotcache_num_bytes
+        );
+        tantivy4java_debug!(
+            "🔍 QUICKWIT DEBUG: Bundle and hotcache bytes size: {}",
+            bundle_and_hotcache_bytes.len()
+        );
+
         let (bundle, hotcache) =
             bundle_and_hotcache_bytes.split_from_end(hotcache_num_bytes as usize);
-            
-        tantivy4java_debug!("🔍 QUICKWIT DEBUG: Bundle size after split: {} bytes", bundle.len());
-        tantivy4java_debug!("🔍 QUICKWIT DEBUG: Hotcache size after split: {} bytes", hotcache.len());
-        
+
+        tantivy4java_debug!(
+            "🔍 QUICKWIT DEBUG: Bundle size after split: {} bytes",
+            bundle.len()
+        );
+        tantivy4java_debug!(
+            "🔍 QUICKWIT DEBUG: Hotcache size after split: {} bytes",
+            hotcache.len()
+        );
+
         Ok((hotcache, Self::open(bundle)?))
     }
 
@@ -179,21 +201,37 @@ impl BundleStorageFileOffsets {
     /// [Files, FileMetadata, FileMetadata Len]
     pub fn open(file: FileSlice) -> anyhow::Result<Self> {
         let thread_id = std::thread::current().id();
-        tantivy4java_debug!("QUICKWIT DEBUG: [Thread {:?}] BundleStorageFileOffsets::open - file size: {}", thread_id, file.len());
-        tantivy4java_debug!("QUICKWIT DEBUG: [Thread {:?}] BundleStorageFileOffsets::open - file slice len: {}", thread_id, file.len());
-        tantivy4java_debug!("QUICKWIT DEBUG: [Thread {:?}] BundleStorageFileOffsets::open - call stack trace:", thread_id);
-        
+        tantivy4java_debug!(
+            "QUICKWIT DEBUG: [Thread {:?}] BundleStorageFileOffsets::open - file size: {}",
+            thread_id,
+            file.len()
+        );
+        tantivy4java_debug!(
+            "QUICKWIT DEBUG: [Thread {:?}] BundleStorageFileOffsets::open - file slice len: {}",
+            thread_id,
+            file.len()
+        );
+        tantivy4java_debug!(
+            "QUICKWIT DEBUG: [Thread {:?}] BundleStorageFileOffsets::open - call stack trace:",
+            thread_id
+        );
+
         // Print complete stack trace to understand the call path - no filters, increased to 30 frames
         let backtrace = std::backtrace::Backtrace::force_capture();
         let backtrace_str = format!("{}", backtrace);
         for (i, line) in backtrace_str.lines().take(30).enumerate() {
-            tantivy4java_debug!("QUICKWIT DEBUG: [Thread {:?}]   {}: {}", thread_id, i, line.trim());
+            tantivy4java_debug!(
+                "QUICKWIT DEBUG: [Thread {:?}]   {}: {}",
+                thread_id,
+                i,
+                line.trim()
+            );
         }
-        
+
         tantivy4java_debug!("QUICKWIT DEBUG: Splitting file from end for metadata length...");
         let (tantivy_files_data, num_bytes_file_metadata) =
             file.split_from_end(BUNDLE_METADATA_LENGTH_NUM_BYTES);
-            
+
         tantivy4java_debug!("QUICKWIT DEBUG: Reading footer num bytes...");
         let footer_num_bytes: u32 = u32::from_le_bytes(
             num_bytes_file_metadata
@@ -208,16 +246,24 @@ impl BundleStorageFileOffsets {
         let mut bundle_storage_file_offsets_data = tantivy_files_data
             .slice_from_end(footer_num_bytes as usize)
             .read_bytes()?;
-        tantivy4java_debug!("QUICKWIT DEBUG: Bundle storage file offsets data size: {}", bundle_storage_file_offsets_data.len());
-        
+        tantivy4java_debug!(
+            "QUICKWIT DEBUG: Bundle storage file offsets data size: {}",
+            bundle_storage_file_offsets_data.len()
+        );
+
         tantivy4java_debug!("QUICKWIT DEBUG: Calling try_read_component...");
-        let result = BundleStorageFileOffsetsVersions::try_read_component(&mut bundle_storage_file_offsets_data);
-        
+        let result = BundleStorageFileOffsetsVersions::try_read_component(
+            &mut bundle_storage_file_offsets_data,
+        );
+
         match &result {
-            Ok(file_offsets) => tantivy4java_debug!("QUICKWIT DEBUG: Successfully read component with {} files", file_offsets.files.len()),
+            Ok(file_offsets) => tantivy4java_debug!(
+                "QUICKWIT DEBUG: Successfully read component with {} files",
+                file_offsets.files.len()
+            ),
             Err(e) => tantivy4java_debug!("QUICKWIT DEBUG: try_read_component failed: {}", e),
         }
-        
+
         result
     }
 

@@ -144,7 +144,11 @@ impl SearchPermitProvider {
     #[cfg(test)]
     async fn stop_and_unwrap(self) -> SearchPermitActor {
         let (message_sender, actor_join_handle) = match self.mode {
-            SearchPermitMode::Async { message_sender, actor_join_handle, .. } => (message_sender, actor_join_handle),
+            SearchPermitMode::Async {
+                message_sender,
+                actor_join_handle,
+                ..
+            } => (message_sender, actor_join_handle),
             SearchPermitMode::Sync { .. } => panic!("Cannot stop_and_unwrap a sync provider"),
         };
         drop(message_sender);
@@ -454,11 +458,18 @@ impl SearchPermit {
     /// This will increase or decrease the available memory in the [`SearchPermitProvider`].
     pub fn update_memory_usage(&mut self, new_memory_usage: ByteSize) {
         match &mut self.mode {
-            SearchPermitMode2::Async { memory_allocation, msg_sender, .. } => {
+            SearchPermitMode2::Async {
+                memory_allocation,
+                msg_sender,
+                ..
+            } => {
                 let new_usage_bytes = new_memory_usage.as_u64();
                 let memory_delta = new_usage_bytes as i64 - *memory_allocation as i64;
                 *memory_allocation = new_usage_bytes;
-                Self::send_if_still_running(msg_sender, SearchPermitMessage::UpdateMemory { memory_delta });
+                Self::send_if_still_running(
+                    msg_sender,
+                    SearchPermitMessage::UpdateMemory { memory_delta },
+                );
             }
             SearchPermitMode2::Sync { sync_permit } => {
                 let new_usage_bytes = new_memory_usage.as_u64();
@@ -475,7 +486,11 @@ impl SearchPermit {
     /// slot is attached to each permit so calling this again has no effect.
     pub fn free_warmup_slot(&mut self) {
         match &mut self.mode {
-            SearchPermitMode2::Async { warmup_slot_freed, msg_sender, .. } => {
+            SearchPermitMode2::Async {
+                warmup_slot_freed,
+                msg_sender,
+                ..
+            } => {
                 if *warmup_slot_freed {
                     return;
                 }
@@ -491,12 +506,17 @@ impl SearchPermit {
 
     pub fn memory_allocation(&self) -> ByteSize {
         match &self.mode {
-            SearchPermitMode2::Async { memory_allocation, .. } => ByteSize(*memory_allocation),
+            SearchPermitMode2::Async {
+                memory_allocation, ..
+            } => ByteSize(*memory_allocation),
             SearchPermitMode2::Sync { sync_permit } => ByteSize(sync_permit.memory_allocation),
         }
     }
 
-    fn send_if_still_running(msg_sender: &mpsc::WeakUnboundedSender<SearchPermitMessage>, msg: SearchPermitMessage) {
+    fn send_if_still_running(
+        msg_sender: &mpsc::WeakUnboundedSender<SearchPermitMessage>,
+        msg: SearchPermitMessage,
+    ) {
         if let Some(sender) = msg_sender.upgrade() {
             sender
                 .send(msg)
@@ -510,16 +530,26 @@ impl SearchPermit {
 impl Drop for SearchPermit {
     fn drop(&mut self) {
         match &self.mode {
-            SearchPermitMode2::Async { memory_allocation, warmup_slot_freed, msg_sender, .. } => {
-                Self::send_if_still_running(msg_sender, SearchPermitMessage::Drop {
-                    memory_size: *memory_allocation,
-                    warmup_slot_freed: *warmup_slot_freed,
-                });
+            SearchPermitMode2::Async {
+                memory_allocation,
+                warmup_slot_freed,
+                msg_sender,
+                ..
+            } => {
+                Self::send_if_still_running(
+                    msg_sender,
+                    SearchPermitMessage::Drop {
+                        memory_size: *memory_allocation,
+                        warmup_slot_freed: *warmup_slot_freed,
+                    },
+                );
             }
             SearchPermitMode2::Sync { sync_permit } => {
                 let mut state = sync_permit.state.lock().unwrap();
                 state.current_permits = state.current_permits.saturating_sub(1);
-                state.current_memory = state.current_memory.saturating_sub(sync_permit.memory_allocation);
+                state.current_memory = state
+                    .current_memory
+                    .saturating_sub(sync_permit.memory_allocation);
             }
         }
     }
@@ -558,7 +588,9 @@ impl Future for SearchPermitFuture {
                 let receiver = Pin::new(receiver);
                 match receiver.poll(cx) {
                     Poll::Ready(Ok(search_permit)) => Poll::Ready(search_permit),
-                    Poll::Ready(Err(_)) => panic!("Failed to acquire permit. This should never happen! Please, report on https://github.com/quickwit-oss/quickwit/issues."),
+                    Poll::Ready(Err(_)) => panic!(
+                        "Failed to acquire permit. This should never happen! Please, report on https://github.com/quickwit-oss/quickwit/issues."
+                    ),
                     Poll::Pending => Poll::Pending,
                 }
             }
@@ -585,7 +617,9 @@ impl Drop for SyncSearchPermit {
         // Decrement the memory and permit counters when the permit is dropped
         let mut state_guard = self.state.lock().unwrap();
         state_guard.current_permits = state_guard.current_permits.saturating_sub(1);
-        state_guard.current_memory = state_guard.current_memory.saturating_sub(self.memory_allocation);
+        state_guard.current_memory = state_guard
+            .current_memory
+            .saturating_sub(self.memory_allocation);
     }
 }
 

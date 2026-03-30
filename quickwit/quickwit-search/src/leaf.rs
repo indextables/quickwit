@@ -27,7 +27,6 @@ use bytesize::ByteSize;
 use futures::future::try_join_all;
 use quickwit_common::pretty::PrettySample;
 use quickwit_common::uri::Uri;
-use tantivy::HasLen;
 use quickwit_directories::{CachingDirectory, HotDirectory, StorageDirectory};
 use quickwit_doc_mapper::{Automaton, DocMapper, FastFieldWarmupInfo, TermRange, WarmupInfo};
 use quickwit_proto::search::lambda_single_split_result::Outcome;
@@ -43,6 +42,7 @@ use quickwit_storage::{
     BundleStorage, ByteRangeCache, MemorySizedCache, OwnedBytes, SplitCache, Storage,
     StorageResolver, TimeoutAndRetryStorage, wrap_storage_with_cache,
 };
+use tantivy::HasLen;
 use tantivy::aggregation::AggContextParams;
 use tantivy::aggregation::agg_req::{AggregationVariants, Aggregations};
 use tantivy::collector::Collector;
@@ -154,7 +154,6 @@ async fn get_split_footer_from_cache_or_fetch(
             )
         })?;
 
-
     footer_cache.put(
         split_and_footer_offsets.split_id.to_owned(),
         footer_data_opt.clone(),
@@ -171,7 +170,6 @@ pub async fn open_split_bundle(
     index_storage: Arc<dyn Storage>,
     split_and_footer_offsets: &SplitIdAndFooterOffsets,
 ) -> anyhow::Result<(FileSlice, BundleStorage)> {
-
     let split_file = PathBuf::from(format!("{}.split", split_and_footer_offsets.split_id));
 
     let footer_data = get_split_footer_from_cache_or_fetch(
@@ -265,36 +263,50 @@ impl tantivy::directory::Directory for OverlayDirectory {
     fn get_file_handle(
         &self,
         path: &std::path::Path,
-    ) -> Result<Arc<dyn tantivy::directory::FileHandle>, tantivy::directory::error::OpenReadError> {
+    ) -> Result<Arc<dyn tantivy::directory::FileHandle>, tantivy::directory::error::OpenReadError>
+    {
         if let Some(data) = self.file_overrides.get(path) {
             debug_println!("📊 OVERLAY: HIT for {:?} ({} bytes)", path, data.len());
             Ok(Arc::new(data.clone()))
         } else {
-            Err(tantivy::directory::error::OpenReadError::FileDoesNotExist(path.to_path_buf()))
+            Err(tantivy::directory::error::OpenReadError::FileDoesNotExist(
+                path.to_path_buf(),
+            ))
         }
     }
 
-    fn exists(&self, path: &std::path::Path) -> Result<bool, tantivy::directory::error::OpenReadError> {
+    fn exists(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<bool, tantivy::directory::error::OpenReadError> {
         if path == std::path::Path::new("meta.json") && self.meta_json.is_some() {
             return Ok(true);
         }
         Ok(self.file_overrides.contains_key(path))
     }
 
-    fn atomic_read(&self, path: &std::path::Path) -> Result<Vec<u8>, tantivy::directory::error::OpenReadError> {
+    fn atomic_read(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<Vec<u8>, tantivy::directory::error::OpenReadError> {
         if path == std::path::Path::new("meta.json") {
             if let Some(meta) = &self.meta_json {
                 return Ok(meta.clone());
             }
         }
-        Err(tantivy::directory::error::OpenReadError::FileDoesNotExist(path.to_path_buf()))
+        Err(tantivy::directory::error::OpenReadError::FileDoesNotExist(
+            path.to_path_buf(),
+        ))
     }
 
     fn atomic_write(&self, _path: &std::path::Path, _data: &[u8]) -> std::io::Result<()> {
         Ok(()) // no-op
     }
 
-    fn delete(&self, _path: &std::path::Path) -> Result<(), tantivy::directory::error::DeleteError> {
+    fn delete(
+        &self,
+        _path: &std::path::Path,
+    ) -> Result<(), tantivy::directory::error::DeleteError> {
         Ok(()) // no-op
     }
 
@@ -305,7 +317,10 @@ impl tantivy::directory::Directory for OverlayDirectory {
         Err(tantivy::directory::error::OpenWriteError::FileAlreadyExists(path.to_path_buf()))
     }
 
-    fn watch(&self, _watch_callback: tantivy::directory::WatchCallback) -> tantivy::Result<tantivy::directory::WatchHandle> {
+    fn watch(
+        &self,
+        _watch_callback: tantivy::directory::WatchCallback,
+    ) -> tantivy::Result<tantivy::directory::WatchHandle> {
         Ok(tantivy::directory::WatchHandle::empty())
     }
 
@@ -352,7 +367,6 @@ pub async fn open_index_with_caches_and_schema_override(
     ephemeral_unbounded_cache: Option<ByteRangeCache>,
     overrides: Option<SplitOverrides>,
 ) -> anyhow::Result<(Index, HotDirectory)> {
-
     let index_storage_with_retry_on_timeout =
         configure_storage_retries(searcher_context, index_storage);
 
@@ -660,9 +674,9 @@ pub async fn leaf_search_single_split(
     search_permit: &mut SearchPermit,
     overrides: Option<SplitOverrides>,
 ) -> crate::Result<Option<LeafSearchResponse>> {
-    let split_outcome_counters = Arc::new(crate::metrics::SplitSearchOutcomeCounters::new_unregistered());
-    let mut leaf_search_state_guard =
-        SplitSearchStateGuard::new(split_outcome_counters);
+    let split_outcome_counters =
+        Arc::new(crate::metrics::SplitSearchOutcomeCounters::new_unregistered());
+    let mut leaf_search_state_guard = SplitSearchStateGuard::new(split_outcome_counters);
 
     // We already checked if the result was already in the partial result cache,
     // but it's not a bad idea to check again.

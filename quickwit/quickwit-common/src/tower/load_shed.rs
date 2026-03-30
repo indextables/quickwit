@@ -31,7 +31,8 @@ pub struct LoadShed<S> {
 }
 
 impl<S> Clone for LoadShed<S>
-where S: Clone
+where
+    S: Clone,
 {
     fn clone(&self) -> Self {
         Self {
@@ -88,7 +89,8 @@ pub struct LoadShedFuture<F> {
 }
 
 impl<F, T, E> Future for LoadShedFuture<F>
-where F: Future<Output = Result<T, E>>
+where
+    F: Future<Output = Result<T, E>>,
 {
     type Output = Result<T, E>;
 

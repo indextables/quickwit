@@ -42,7 +42,9 @@ impl Serialize for SpanId {
 
 impl<'de> Deserialize<'de> for SpanId {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where D: Deserializer<'de> {
+    where
+        D: Deserializer<'de>,
+    {
         let hexspan_id = String::deserialize(deserializer)?;
 
         if hexspan_id.len() != SpanId::HEX_LENGTH {

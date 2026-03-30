@@ -96,7 +96,7 @@ impl Default for RuntimesConfig {
 fn start_runtimes(config: RuntimesConfig) -> HashMap<RuntimeType, Runtime> {
     let mut runtimes = HashMap::with_capacity(2);
 
-    let disable_lifo_slot = crate::get_bool_from_env("QW_DISABLE_TOKIO_LIFO_SLOT", true);
+    let _disable_lifo_slot = crate::get_bool_from_env("QW_DISABLE_TOKIO_LIFO_SLOT", true);
 
     let mut blocking_runtime_builder = tokio::runtime::Builder::new_multi_thread();
     //if disable_lifo_slot {
@@ -172,26 +172,27 @@ pub fn scrape_tokio_runtime_metrics(handle: &tokio::runtime::Handle, label: &'st
             loop {
                 interval.tick().await;
                 let metrics = handle_clone.metrics();
-                
+
                 // Calculate cumulative busy duration across all workers
                 let mut total_busy_duration = Duration::ZERO;
                 let mut total_local_queue_depth = 0;
-                
+
                 for worker_id in 0..metrics.num_workers() {
                     total_busy_duration += metrics.worker_total_busy_duration(worker_id);
                     total_local_queue_depth += metrics.worker_local_queue_depth(worker_id);
                 }
-                
+
                 // Calculate busy ratio as the delta since last measurement
-                let busy_duration_delta = total_busy_duration.saturating_sub(last_total_busy_duration);
+                let busy_duration_delta =
+                    total_busy_duration.saturating_sub(last_total_busy_duration);
                 let busy_ratio = busy_duration_delta.as_secs_f64() / 1.0; // 1 second interval
                 last_total_busy_duration = total_busy_duration;
-                
+
                 prometheus_runtime_metrics.update_with_values(
                     total_local_queue_depth,
                     busy_duration_delta,
                     busy_ratio,
-                    metrics.num_workers()
+                    metrics.num_workers(),
                 );
             }
         });
@@ -203,7 +204,7 @@ pub fn scrape_tokio_runtime_metrics(handle: &tokio::runtime::Handle, label: &'st
         handle.spawn(async move {
             let _interval = tokio::time::interval(Duration::from_secs(1));
             let _prometheus_runtime_metrics = PrometheusRuntimeMetrics::new(label);
-            
+
             // Without tokio_unstable, we can't access detailed runtime metrics
             // This is a no-op implementation to maintain compatibility
             tracing::warn!("Runtime metrics collection requires tokio_unstable feature");
@@ -249,19 +250,18 @@ impl PrometheusRuntimeMetrics {
         }
     }
 
-    pub fn update_with_values(&mut self, 
+    pub fn update_with_values(
+        &mut self,
         total_local_queue_depth: usize,
         busy_duration_delta: Duration,
         busy_ratio: f64,
-        num_workers: usize
+        num_workers: usize,
     ) {
-        self.scheduled_tasks
-            .set(total_local_queue_depth as i64);
+        self.scheduled_tasks.set(total_local_queue_depth as i64);
         self.worker_busy_duration_milliseconds_total
             .inc_by(busy_duration_delta.as_millis() as u64);
         self.worker_busy_ratio.set(busy_ratio.min(1.0));
-        self.worker_threads
-            .set(num_workers as i64);
+        self.worker_threads.set(num_workers as i64);
     }
 }
 

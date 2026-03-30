@@ -73,5 +73,7 @@ pub trait Processor:
 {
 }
 
-impl<T> Processor for T where T: Actor + Handler<RawDocBatch> + Handler<NewPublishLock> + Handler<NewPublishToken>
-{}
+impl<T> Processor for T where
+    T: Actor + Handler<RawDocBatch> + Handler<NewPublishLock> + Handler<NewPublishToken>
+{
+}

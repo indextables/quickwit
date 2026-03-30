@@ -155,9 +155,14 @@ impl BuildTantivyAst for FieldPresenceQuery {
         }
 
         // Some fields are not fast, need _field_presence field for fallback
-        let field_presence_field = context.schema.get_field(FIELD_PRESENCE_FIELD_NAME).map_err(|_| {
-            InvalidQuery::SchemaError("field presence is not available for this split".to_string())
-        })?;
+        let field_presence_field = context
+            .schema
+            .get_field(FIELD_PRESENCE_FIELD_NAME)
+            .map_err(|_| {
+                InvalidQuery::SchemaError(
+                    "field presence is not available for this split".to_string(),
+                )
+            })?;
         let queries = fields
             .into_iter()
             .map(|(field, entry, path)| {

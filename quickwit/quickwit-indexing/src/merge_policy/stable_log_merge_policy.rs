@@ -436,7 +436,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "All splits are expected to be smaller than `split_num_docs_target`.")]
+    #[should_panic(
+        expected = "All splits are expected to be smaller than `split_num_docs_target`."
+    )]
     fn test_stable_log_merge_policy_build_split_panics_if_exceeding_split_num_docs_target() {
         let merge_policy = StableLogMergePolicy::default();
         let splits = create_splits(&merge_policy, vec![11_000_000]);

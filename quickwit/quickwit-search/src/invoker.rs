@@ -39,7 +39,8 @@ pub trait LambdaLeafSearchInvoker: Send + Sync + 'static {
 
 #[async_trait]
 impl<T> LambdaLeafSearchInvoker for Box<T>
-where T: LambdaLeafSearchInvoker + ?Sized
+where
+    T: LambdaLeafSearchInvoker + ?Sized,
 {
     async fn invoke_leaf_search(
         &self,
@@ -51,7 +52,8 @@ where T: LambdaLeafSearchInvoker + ?Sized
 
 #[async_trait]
 impl<T> LambdaLeafSearchInvoker for std::sync::Arc<T>
-where T: LambdaLeafSearchInvoker + ?Sized
+where
+    T: LambdaLeafSearchInvoker + ?Sized,
 {
     async fn invoke_leaf_search(
         &self,

@@ -84,6 +84,10 @@ pub use crate::cluster_client::ClusterClient;
 pub use crate::error::{SearchError, parse_grpc_error};
 use crate::fetch_docs::fetch_docs;
 pub use crate::invoker::LambdaLeafSearchInvoker;
+pub use crate::leaf::{
+    CanSplitDoBetter, SplitOverrides, leaf_search_single_split, open_index_with_caches,
+    open_split_bundle, warmup,
+};
 pub use crate::root::{
     IndexMetasForLeafSearch, SearchJob, ensure_all_indexes_found, jobs_to_leaf_request,
     root_search, search_plan,
@@ -93,7 +97,6 @@ pub use crate::search_response_rest::{
     AggregationResults, SearchPlanResponseRest, SearchResponseRest,
 };
 pub use crate::service::{MockSearchService, SearchService, SearchServiceImpl};
-pub use crate::leaf::{leaf_search_single_split, warmup, CanSplitDoBetter, open_split_bundle, open_index_with_caches, SplitOverrides};
 pub use quickwit_doc_mapper::WarmupInfo;
 
 /// A pool of searcher clients identified by their gRPC socket address.

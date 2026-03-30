@@ -61,7 +61,9 @@ impl Serialize for ShardInfo {
 
 impl<'de> Deserialize<'de> for ShardInfo {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where D: serde::Deserializer<'de> {
+    where
+        D: serde::Deserializer<'de>,
+    {
         let value = String::deserialize(deserializer)?;
         let mut parts = value.split(':');
 

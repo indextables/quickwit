@@ -80,7 +80,8 @@ impl<'a, DB: Database> Acquire<'a> for &TrackedPool<DB> {
 }
 
 impl<DB: Database> Executor<'_> for &TrackedPool<DB>
-where for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>
+where
+    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
 {
     type Database = DB;
 

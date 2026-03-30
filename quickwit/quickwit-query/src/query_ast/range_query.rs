@@ -35,7 +35,9 @@ pub struct RangeQuery {
 
 /// Converts a given bound JsonLiteral bound into a bound of type T.
 fn convert_bound<'a, T>(bound: &'a Bound<JsonLiteral>) -> Option<Bound<T>>
-where T: InterpretUserInput<'a> {
+where
+    T: InterpretUserInput<'a>,
+{
     match bound {
         Bound::Included(val) => {
             let val = T::interpret_json(val)?;

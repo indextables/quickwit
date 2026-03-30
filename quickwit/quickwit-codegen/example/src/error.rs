@@ -67,7 +67,8 @@ impl GrpcServiceError for HelloError {
 }
 
 impl<E> From<AskError<E>> for HelloError
-where E: fmt::Debug
+where
+    E: fmt::Debug,
 {
     fn from(error: AskError<E>) -> Self {
         HelloError::Internal(format!("{error:?}"))

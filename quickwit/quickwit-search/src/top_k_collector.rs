@@ -350,7 +350,8 @@ impl<D: Clone> Clone for TopKComputer<D> {
 }
 
 impl<D> TopKComputer<D>
-where D: Ord + Copy + Debug + MinValue
+where
+    D: Ord + Copy + Debug + MinValue,
 {
     /// Create a new `TopKComputer`.
     pub fn new(top_n: usize) -> Self {

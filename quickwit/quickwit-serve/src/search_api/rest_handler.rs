@@ -119,14 +119,18 @@ impl From<String> for SortBy {
 }
 
 pub fn sort_by_mini_dsl<'de, D>(deserializer: D) -> Result<SortBy, D::Error>
-where D: Deserializer<'de> {
+where
+    D: Deserializer<'de>,
+{
     let sort_by_mini_dsl = String::deserialize(deserializer)?;
     Ok(SortBy::from(sort_by_mini_dsl))
 }
 
 impl Serialize for SortBy {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where S: Serializer {
+    where
+        S: Serializer,
+    {
         let mut sort_by_mini_dsl = String::new();
 
         for sort_field in &self.sort_fields {
@@ -217,7 +221,9 @@ mod count_hits_from_bool {
     use serde::{self, Deserialize, Deserializer, Serializer};
 
     pub fn serialize<S>(count_hits: &CountHits, serializer: S) -> Result<S::Ok, S::Error>
-    where S: Serializer {
+    where
+        S: Serializer,
+    {
         if count_hits == &CountHits::Underestimate {
             serializer.serialize_bool(false)
         } else {
@@ -226,7 +232,9 @@ mod count_hits_from_bool {
     }
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<CountHits, D::Error>
-    where D: Deserializer<'de> {
+    where
+        D: Deserializer<'de>,
+    {
         let count_all = Option::<bool>::deserialize(deserializer)?.unwrap_or(true);
         Ok(if count_all {
             CountHits::CountAll

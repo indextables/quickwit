@@ -25,7 +25,8 @@ use crate::retry::{RetryParams, Retryable};
 /// Retry layer copy/pasted from `tower::retry::RetryLayer`
 /// but which implements `Clone`.
 impl<P, S> Layer<S> for RetryLayer<P>
-where P: Clone
+where
+    P: Clone,
 {
     type Service = Retry<P, S>;
 

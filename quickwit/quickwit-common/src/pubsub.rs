@@ -125,7 +125,9 @@ impl EventBroker {
     /// the callback future will be aborted.
     #[must_use]
     pub fn subscribe<E>(&self, subscriber: impl EventSubscriber<E>) -> EventSubscriptionHandle
-    where E: Event {
+    where
+        E: Event,
+    {
         self.subscribe_aux(subscriber, true)
     }
 
@@ -145,7 +147,9 @@ impl EventBroker {
 
     /// Publishes an event.
     pub fn publish<E>(&self, event: E)
-    where E: Event {
+    where
+        E: Event,
+    {
         let subscriptions = self
             .inner
             .subscriptions

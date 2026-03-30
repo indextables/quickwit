@@ -62,7 +62,9 @@ impl TokenizerManager {
 
     /// Registers a new tokenizer associated with a given name.
     pub fn register<T>(&self, tokenizer_name: &str, tokenizer: T, does_lowercasing: bool)
-    where TextAnalyzer: From<T> {
+    where
+        TextAnalyzer: From<T>,
+    {
         self.inner.register(tokenizer_name, tokenizer);
         self.is_lowercaser
             .write()

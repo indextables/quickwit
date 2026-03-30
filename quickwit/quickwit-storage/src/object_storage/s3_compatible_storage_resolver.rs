@@ -72,7 +72,11 @@ impl StorageFactory for S3CompatibleObjectStorageFactory {
             .s3_client
             .get_or_init(|| async {
                 if let Some(ref credentials_provider) = self.credentials_provider {
-                    create_s3_client_with_provider(&self.storage_config, Some(credentials_provider.clone())).await
+                    create_s3_client_with_provider(
+                        &self.storage_config,
+                        Some(credentials_provider.clone()),
+                    )
+                    .await
                 } else {
                     create_s3_client(&self.storage_config).await
                 }
@@ -112,7 +116,10 @@ mod tests {
 
         let factory = S3CompatibleObjectStorageFactory::new(config.clone());
         assert_eq!(factory.storage_config.access_key_id, config.access_key_id);
-        assert_eq!(factory.storage_config.secret_access_key, config.secret_access_key);
+        assert_eq!(
+            factory.storage_config.secret_access_key,
+            config.secret_access_key
+        );
         assert_eq!(factory.storage_config.region, config.region);
         assert!(factory.credentials_provider.is_none());
     }
@@ -124,12 +131,18 @@ mod tests {
             ..Default::default()
         };
 
-        let credentials = Credentials::new("provider_key", "provider_secret", Some("provider_token".to_string()), None, "test_provider");
+        let credentials = Credentials::new(
+            "provider_key",
+            "provider_secret",
+            Some("provider_token".to_string()),
+            None,
+            "test_provider",
+        );
         let credentials_provider = SharedCredentialsProvider::new(credentials);
 
         let factory = S3CompatibleObjectStorageFactory::new_with_credentials_provider(
             config.clone(),
-            credentials_provider.clone()
+            credentials_provider.clone(),
         );
 
         assert_eq!(factory.storage_config.region, config.region);
@@ -174,12 +187,18 @@ mod tests {
             ..Default::default()
         };
 
-        let credentials = Credentials::new("provider_key", "provider_secret", Some("provider_token".to_string()), None, "test_provider");
+        let credentials = Credentials::new(
+            "provider_key",
+            "provider_secret",
+            Some("provider_token".to_string()),
+            None,
+            "test_provider",
+        );
         let credentials_provider = SharedCredentialsProvider::new(credentials);
 
         let factory = S3CompatibleObjectStorageFactory::new_with_credentials_provider(
             config,
-            credentials_provider
+            credentials_provider,
         );
         let uri = Uri::for_test("s3://test-bucket/test-prefix");
 

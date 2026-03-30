@@ -38,7 +38,8 @@ impl<E> AwsRetryable for Retry<E> {
 struct AwsRetryableWrapper<E>(E);
 
 impl<E> Retryable for AwsRetryableWrapper<E>
-where E: AwsRetryable
+where
+    E: AwsRetryable,
 {
     fn is_retryable(&self) -> bool {
         self.0.is_retryable()

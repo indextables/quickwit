@@ -233,7 +233,8 @@ mod prefix {
     }
 
     impl<A: Automaton + Send + Sync + 'static> Query for AutomatonQuery<A>
-    where A::State: Clone
+    where
+        A::State: Clone,
     {
         fn weight(&self, _enabled_scoring: EnableScoring<'_>) -> tantivy::Result<Box<dyn Weight>> {
             Ok(Box::new(AutomatonWeight::<A>::new(

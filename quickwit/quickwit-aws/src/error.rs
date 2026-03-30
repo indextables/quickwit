@@ -29,7 +29,8 @@ use aws_sdk_s3::operation::upload_part::UploadPartError;
 use crate::retry::AwsRetryable;
 
 impl<E> AwsRetryable for SdkError<E>
-where E: AwsRetryable
+where
+    E: AwsRetryable,
 {
     fn is_retryable(&self) -> bool {
         match self {

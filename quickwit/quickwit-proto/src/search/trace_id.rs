@@ -50,7 +50,9 @@ impl Serialize for TraceId {
 
 impl<'de> Deserialize<'de> for TraceId {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where D: Deserializer<'de> {
+    where
+        D: Deserializer<'de>,
+    {
         if deserializer.is_human_readable() {
             let hextrace_id = String::deserialize(deserializer)?;
             if hextrace_id.len() != TraceId::HEX_LENGTH {

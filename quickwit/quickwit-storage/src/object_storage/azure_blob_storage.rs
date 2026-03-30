@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::{fmt, io};
 
-use super::s3_compatible_storage::{OBJECT_STORAGE_REQUEST_COUNT, OBJECT_STORAGE_BYTES_FETCHED};
+use super::s3_compatible_storage::{OBJECT_STORAGE_BYTES_FETCHED, OBJECT_STORAGE_REQUEST_COUNT};
 
 use async_trait::async_trait;
 use azure_core::error::ErrorKind;
@@ -115,7 +115,11 @@ impl AzureBlobStorage {
             let blob_endpoint = if endpoint_url.contains(&storage_account_name) {
                 endpoint_url.clone()
             } else {
-                let constructed = format!("{}/{}", endpoint_url.trim_end_matches('/'), storage_account_name);
+                let constructed = format!(
+                    "{}/{}",
+                    endpoint_url.trim_end_matches('/'),
+                    storage_account_name
+                );
                 constructed
             };
 
@@ -245,7 +249,6 @@ impl AzureBlobStorage {
         path: &Path,
         range_opt: Option<Range<usize>>,
     ) -> StorageResult<Vec<u8>> {
-
         let name = self.blob_name(path);
 
         let capacity = range_opt.as_ref().map(Range::len).unwrap_or(0);
@@ -487,19 +490,16 @@ impl Storage for AzureBlobStorage {
 
         let result = self.get_to_vec(path, Some(range.clone())).await;
 
-        let final_result = result
-            .map(OwnedBytes::new)
-            .map_err(|err| {
-                err.add_context(format!(
-                    "failed to fetch slice {:?} for object: {}/{}",
-                    range,
-                    self.uri,
-                    path.display(),
-                ))
-            });
+        let final_result = result.map(OwnedBytes::new).map_err(|err| {
+            err.add_context(format!(
+                "failed to fetch slice {:?} for object: {}/{}",
+                range,
+                self.uri,
+                path.display(),
+            ))
+        });
 
-        if final_result.is_ok() {
-        }
+        if final_result.is_ok() {}
 
         final_result
     }
@@ -615,7 +615,6 @@ async fn download_all(
     chunk_stream: &mut Pageable<GetBlobResponse, AzureError>,
     output: &mut Vec<u8>,
 ) -> Result<(), AzureErrorWrapper> {
-
     output.clear();
 
     let mut chunk_count = 0;
@@ -625,9 +624,7 @@ async fn download_all(
     } {
         chunk_count += 1;
         let chunk_response = match chunk_result {
-            Ok(response) => {
-                response
-            }
+            Ok(response) => response,
             Err(e) => {
                 return Err(e.into());
             }

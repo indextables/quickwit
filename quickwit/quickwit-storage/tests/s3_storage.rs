@@ -168,8 +168,7 @@ pub mod s3_storage_test_suite {
             return;
         }
 
-        let bucket_uri =
-            append_random_suffix("s3://quickwit-integration-tests/test-session-token");
+        let bucket_uri = append_random_suffix("s3://quickwit-integration-tests/test-session-token");
         let test_runtime = test_runtime_singleton();
         test_runtime.block_on(run_s3_storage_test_suite(s3_storage_config, &bucket_uri));
     }
@@ -187,10 +186,16 @@ pub mod s3_storage_test_suite {
             // or use mock credentials for testing
             let credentials = if let (Ok(access_key), Ok(secret_key)) = (
                 std::env::var("AWS_ACCESS_KEY_ID"),
-                std::env::var("AWS_SECRET_ACCESS_KEY")
+                std::env::var("AWS_SECRET_ACCESS_KEY"),
             ) {
                 let session_token = std::env::var("AWS_SESSION_TOKEN").ok();
-                Credentials::new(access_key, secret_key, session_token, None, "integration_test")
+                Credentials::new(
+                    access_key,
+                    secret_key,
+                    session_token,
+                    None,
+                    "integration_test",
+                )
             } else {
                 // Use mock credentials for unit testing
                 eprintln!("Using mock credentials for provider test");
@@ -198,7 +203,8 @@ pub mod s3_storage_test_suite {
             };
 
             let credentials_provider = SharedCredentialsProvider::new(credentials);
-            let bucket_uri = append_random_suffix("s3://quickwit-integration-tests/test-credentials-provider");
+            let bucket_uri =
+                append_random_suffix("s3://quickwit-integration-tests/test-credentials-provider");
             let storage_uri = Uri::from_str(&bucket_uri).unwrap();
 
             let s3_storage_config = S3StorageConfig {
@@ -233,7 +239,7 @@ pub mod s3_storage_test_suite {
             // Create credentials provider
             let credentials = if let (Ok(access_key), Ok(secret_key)) = (
                 std::env::var("AWS_ACCESS_KEY_ID"),
-                std::env::var("AWS_SECRET_ACCESS_KEY")
+                std::env::var("AWS_SECRET_ACCESS_KEY"),
             ) {
                 let session_token = std::env::var("AWS_SESSION_TOKEN").ok();
                 Credentials::new(access_key, secret_key, session_token, None, "factory_test")
@@ -252,13 +258,19 @@ pub mod s3_storage_test_suite {
                 credentials_provider,
             );
 
-            let bucket_uri = append_random_suffix("s3://quickwit-integration-tests/test-factory-provider");
+            let bucket_uri =
+                append_random_suffix("s3://quickwit-integration-tests/test-factory-provider");
             let storage_uri = Uri::from_str(&bucket_uri).unwrap();
 
             let storage = factory.resolve(&storage_uri).await.unwrap();
 
             // Verify the storage was created successfully
-            assert!(storage.uri().as_str().contains("quickwit-integration-tests"));
+            assert!(
+                storage
+                    .uri()
+                    .as_str()
+                    .contains("quickwit-integration-tests")
+            );
         });
     }
 }

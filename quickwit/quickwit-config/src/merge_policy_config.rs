@@ -120,7 +120,9 @@ impl Default for StableLogMergePolicyConfig {
 }
 
 fn parse_human_duration<'de, D>(deserializer: D) -> Result<Duration, D::Error>
-where D: Deserializer<'de> {
+where
+    D: Deserializer<'de>,
+{
     let value: String = Deserialize::deserialize(deserializer)?;
     let duration = humantime::parse_duration(&value).map_err(|error| {
         de::Error::custom(format!(
@@ -131,7 +133,9 @@ where D: Deserializer<'de> {
 }
 
 fn serialize_duration<S>(value: &Duration, s: S) -> Result<S::Ok, S::Error>
-where S: Serializer {
+where
+    S: Serializer,
+{
     let value_str = humantime::format_duration(*value).to_string();
     s.serialize_str(&value_str)
 }

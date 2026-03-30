@@ -27,12 +27,16 @@ pub mod bytesize_serde {
     use serde::{Deserialize, Deserializer, Serializer};
 
     pub fn serialize<S>(byte_size: &ByteSize, serializer: S) -> Result<S::Ok, S::Error>
-    where S: Serializer {
+    where
+        S: Serializer,
+    {
         serializer.serialize_u64(byte_size.as_u64())
     }
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<ByteSize, D::Error>
-    where D: Deserializer<'de> {
+    where
+        D: Deserializer<'de>,
+    {
         ByteSize::deserialize(deserializer)
     }
 }

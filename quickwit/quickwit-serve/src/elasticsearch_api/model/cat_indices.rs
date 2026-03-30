@@ -199,12 +199,16 @@ impl From<IndexMetadata> for ElasticsearchResolveIndexEntryResponse {
 }
 
 fn serialize_u64_as_string<S>(value: &u64, serializer: S) -> Result<S::Ok, S::Error>
-where S: Serializer {
+where
+    S: Serializer,
+{
     serializer.serialize_str(&value.to_string())
 }
 
 fn ser_es_format<S>(bytes: &u64, serializer: S) -> Result<S::Ok, S::Error>
-where S: Serializer {
+where
+    S: Serializer,
+{
     serializer.serialize_str(&format_byte_size(*bytes))
 }
 

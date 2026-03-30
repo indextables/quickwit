@@ -49,7 +49,8 @@ impl<K, V> Clone for Pool<K, V> {
 }
 
 impl<K, V> Default for Pool<K, V>
-where K: Eq + PartialEq + Hash
+where
+    K: Eq + PartialEq + Hash,
 {
     fn default() -> Self {
         Self {
@@ -192,10 +193,13 @@ where
 }
 
 impl<K, V> FromIterator<(K, V)> for Pool<K, V>
-where K: Eq + PartialEq + Hash
+where
+    K: Eq + PartialEq + Hash,
 {
     fn from_iter<I>(iter: I) -> Self
-    where I: IntoIterator<Item = (K, V)> {
+    where
+        I: IntoIterator<Item = (K, V)>,
+    {
         Self {
             pool: Arc::new(RwLock::new(HashMap::from_iter(iter))),
         }
