@@ -608,7 +608,7 @@ pub async fn merge_split_directories_standalone(
             let query_ast: QueryAst = serde_json::from_str(&delete_query.query_ast)
                 .context("invalid query_ast json")?;
             let parsed_query_ast = query_ast.parse_user_query(&[]).context("invalid query")?;
-            let (query, _) = doc_mapper.query(union_index.schema(), &parsed_query_ast, false)?;
+            let (query, _) = doc_mapper.query(union_index.schema(), parsed_query_ast, false, None)?;
             index_writer.delete_query(query)?;
         }
         debug!("commit-delete-operations");

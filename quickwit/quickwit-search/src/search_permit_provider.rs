@@ -281,7 +281,7 @@ impl LeafPermitRequest {
                 permit_sender: tx,
                 permit_size,
             });
-            permits.push(SearchPermitFuture(rx));
+            permits.push(SearchPermitFuture::from_async_receiver(rx));
         }
         (
             LeafPermitRequest {
@@ -525,12 +525,10 @@ impl Drop for SearchPermit {
     }
 }
 
-#[derive(Debug)]
 pub struct SearchPermitFuture {
     mode: SearchPermitFutureMode,
 }
 
-#[derive(Debug)]
 enum SearchPermitFutureMode {
     Async(oneshot::Receiver<SearchPermit>),
     Sync(Option<SyncSearchPermit>),
