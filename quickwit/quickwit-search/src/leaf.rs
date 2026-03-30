@@ -652,19 +652,21 @@ fn compute_index_size(hot_directory: &HotDirectory) -> ByteSize {
 #[allow(clippy::too_many_arguments)]
 pub async fn leaf_search_single_split(
     search_request: SearchRequest,
-    ctx: Arc<LeafSearchContext>,
+    searcher_context: Arc<SearcherContext>,
     storage: Arc<dyn Storage>,
     split: SplitIdAndFooterOffsets,
+    doc_mapper: Arc<quickwit_doc_mapper::DocMapper>,
+    split_filter: Arc<std::sync::RwLock<CanSplitDoBetter>>,
     search_permit: &mut SearchPermit,
     overrides: Option<SplitOverrides>,
 ) -> crate::Result<Option<LeafSearchResponse>> {
+    let split_outcome_counters = Arc::new(crate::metrics::SplitSearchOutcomeCounters::new_unregistered());
     let mut leaf_search_state_guard =
-        SplitSearchStateGuard::new(ctx.split_outcome_counters.clone());
+        SplitSearchStateGuard::new(split_outcome_counters);
 
     // We already checked if the result was already in the partial result cache,
     // but it's not a bad idea to check again.
-    if let Some(cached_answer) = ctx
-        .searcher_context
+    if let Some(cached_answer) = searcher_context
         .leaf_search_cache
         .get(split.clone(), search_request.clone())
     {
@@ -687,10 +689,10 @@ pub async fn leaf_search_single_split(
     let byte_range_cache =
         ByteRangeCache::with_infinite_capacity(&quickwit_storage::STORAGE_METRICS.shortlived_cache);
     let (index, hot_directory) = open_index_with_caches_and_schema_override(
-        &ctx.searcher_context,
+        &searcher_context,
         storage,
         &split,
-        Some(ctx.doc_mapper.tokenizer_manager()),
+        Some(doc_mapper.tokenizer_manager()),
         Some(byte_range_cache.clone()),
         overrides,
     )
@@ -708,8 +710,8 @@ pub async fn leaf_search_single_split(
         .searcher();
 
     let agg_context_params = AggContextParams {
-        limits: ctx.searcher_context.get_aggregation_limits(),
-        tokenizers: ctx.doc_mapper.tokenizer_manager().tantivy_manager().clone(),
+        limits: searcher_context.get_aggregation_limits(),
+        tokenizers: doc_mapper.tokenizer_manager().tantivy_manager().clone(),
     };
     let mut collector =
         make_collector_for_split(split_id.clone(), &search_request, agg_context_params)?;
@@ -719,12 +721,12 @@ pub async fn leaf_search_single_split(
         None
     } else {
         Some((
-            ctx.searcher_context.predicate_cache.clone() as _,
+            searcher_context.predicate_cache.clone() as _,
             split.split_id.clone(),
         ))
     };
     let split_schema = index.schema();
-    let (query, mut warmup_info) = ctx.doc_mapper.query(
+    let (query, mut warmup_info) = doc_mapper.query(
         split_schema.clone(),
         query_ast.clone(),
         false,
@@ -760,7 +762,7 @@ pub async fn leaf_search_single_split(
 
     let split_clone = split.clone();
 
-    let ctx_clone = ctx.clone();
+    let split_filter_clone = split_filter.clone();
     leaf_search_state_guard.set_state(SplitSearchState::CpuQueue);
     let search_request_and_result: Option<(SearchRequest, LeafSearchResponse)> =
         crate::search_thread_pool()
@@ -772,7 +774,7 @@ pub async fn leaf_search_single_split(
                 // Our search execution has been scheduled, let's check if we can improve the
                 // request based on the results of the preceding searches
                 let Some(simplified_search_request) =
-                    simplify_search_request(search_request, &split_clone, &ctx_clone.split_filter)
+                    simplify_search_request(search_request, &split_clone, &split_filter_clone)
                 else {
                     leaf_search_state_guard.set_state(SplitSearchState::PrunedAfterWarmup);
                     return Ok(None);
@@ -811,7 +813,7 @@ pub async fn leaf_search_single_split(
         return Ok(None);
     };
     // We save our result in the cache.
-    ctx.searcher_context
+    searcher_context
         .leaf_search_cache
         .put(split, leaf_search_req, leaf_search_resp.clone());
     Ok(Some(leaf_search_resp))
@@ -2029,9 +2031,11 @@ async fn leaf_search_single_split_wrapper(
     let leaf_search_single_split_opt_res: crate::Result<Option<LeafSearchResponse>> =
         leaf_search_single_split(
             request,
-            ctx.clone(),
+            ctx.searcher_context.clone(),
             index_storage,
             split.clone(),
+            ctx.doc_mapper.clone(),
+            ctx.split_filter.clone(),
             &mut search_permit,
             None,
         )
