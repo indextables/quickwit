@@ -17,7 +17,7 @@ use std::collections::HashSet;
 
 use fnv::{FnvHashMap, FnvHashSet};
 use itertools::Itertools;
-use quickwit_opentelemetry::otlp::TraceId;
+use quickwit_proto::search::TraceId;
 use serde::{Deserialize, Serialize};
 use tantivy::collector::{Collector, SegmentCollector};
 use tantivy::columnar::BytesColumn;
@@ -344,12 +344,16 @@ mod serde_datetime {
     use tantivy::DateTime;
 
     pub(crate) fn serialize<S>(datetime: &DateTime, serializer: S) -> Result<S::Ok, S::Error>
-    where S: Serializer {
+    where
+        S: Serializer,
+    {
         serializer.serialize_i64(datetime.into_timestamp_nanos())
     }
 
     pub(crate) fn deserialize<'de, D>(deserializer: D) -> Result<DateTime, D::Error>
-    where D: Deserializer<'de> {
+    where
+        D: Deserializer<'de>,
+    {
         let datetime_i64: i64 = Deserialize::deserialize(deserializer)?;
         Ok(DateTime::from_timestamp_nanos(datetime_i64))
     }

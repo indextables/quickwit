@@ -112,7 +112,9 @@ impl Debouncer {
     }
 
     pub fn self_send_with_cooldown<M>(&self, ctx: &ActorContext<impl Handler<M>>)
-    where M: Default + std::fmt::Debug + Send + Sync + 'static {
+    where
+        M: Default + std::fmt::Debug + Send + Sync + 'static,
+    {
         let cooldown_state = self.accept_transition(Transition::Emit);
         match cooldown_state {
             DebouncerState::NoCooldown => {

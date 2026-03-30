@@ -12,11 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import * as React from 'react';
-
 // Mock MonocoEditor as the current jest setup does not work when Monaco JS files
 // are loaded.
-export default function MonacoEditor(props) {
+export const Editor = (props) => {
   return <div>{props.value}</div>;
-}
-
+};

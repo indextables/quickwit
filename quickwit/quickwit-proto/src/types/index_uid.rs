@@ -86,7 +86,9 @@ impl FromStr for IndexUid {
 
 impl<'de> Deserialize<'de> for IndexUid {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where D: Deserializer<'de> {
+    where
+        D: Deserializer<'de>,
+    {
         let index_uid_str: Cow<'de, str> = Cow::deserialize(deserializer)?;
         let index_uid = IndexUid::from_str(&index_uid_str).map_err(D::Error::custom)?;
         Ok(index_uid)
@@ -95,7 +97,9 @@ impl<'de> Deserialize<'de> for IndexUid {
 
 impl Serialize for IndexUid {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where S: Serializer {
+    where
+        S: Serializer,
+    {
         serializer.collect_str(&self)
     }
 }
@@ -187,9 +191,12 @@ impl sqlx::Type<sqlx::Postgres> for IndexUid {
 
 #[cfg(feature = "postgres")]
 impl sqlx::Encode<'_, sqlx::Postgres> for IndexUid {
-    fn encode_by_ref(&self, buf: &mut sqlx::postgres::PgArgumentBuffer) -> sqlx::encode::IsNull {
-        let _ = sqlx::Encode::<sqlx::Postgres>::encode(&self.index_id, buf);
-        let _ = sqlx::Encode::<sqlx::Postgres>::encode(":", buf);
+    fn encode_by_ref(
+        &self,
+        buf: &mut sqlx::postgres::PgArgumentBuffer,
+    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
+        let _ = sqlx::Encode::<sqlx::Postgres>::encode(&self.index_id, buf)?;
+        let _ = sqlx::Encode::<sqlx::Postgres>::encode(":", buf)?;
         sqlx::Encode::<sqlx::Postgres>::encode(self.incarnation_id.to_string(), buf)
     }
 }

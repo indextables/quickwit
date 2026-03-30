@@ -18,13 +18,12 @@ use std::collections::BTreeMap;
 
 use anyhow::Context;
 use colored::Colorize;
-use opentelemetry::global;
-use quickwit_cli::busy_detector;
 use quickwit_cli::checklist::RED_COLOR;
 use quickwit_cli::cli::{CliCommand, build_cli};
 #[cfg(feature = "jemalloc")]
 use quickwit_cli::jemalloc::start_jemalloc_metrics_loop;
 use quickwit_cli::logger::setup_logging_and_tracing;
+use quickwit_cli::{busy_detector, install_default_crypto_ring_provider};
 use quickwit_common::runtimes::scrape_tokio_runtime_metrics;
 use quickwit_serve::BuildInfo;
 use tracing::error;
@@ -33,7 +32,11 @@ use tracing::error;
 /// QW_RUNTIME_NUM_THREADS environment variable.
 fn get_main_runtime_num_threads() -> usize {
     let default_num_runtime_threads: usize = quickwit_common::num_cpus().div_ceil(3);
-    quickwit_common::get_from_env("QW_TOKIO_RUNTIME_NUM_THREADS", default_num_runtime_threads)
+    quickwit_common::get_from_env(
+        "QW_TOKIO_RUNTIME_NUM_THREADS",
+        default_num_runtime_threads,
+        false,
+    )
 }
 
 fn main() -> anyhow::Result<()> {
@@ -89,11 +92,13 @@ async fn main_impl() -> anyhow::Result<()> {
         }
     };
 
+    install_default_crypto_ring_provider();
+
     #[cfg(feature = "jemalloc")]
     start_jemalloc_metrics_loop();
 
     let build_info = BuildInfo::get();
-    let env_filter_reload_fn =
+    let (env_filter_reload_fn, tracer_provider_opt) =
         setup_logging_and_tracing(command.default_log_level(), ansi_colors, build_info)?;
 
     let return_code: i32 = if let Err(command_error) = command.execute(env_filter_reload_fn).await {
@@ -108,7 +113,15 @@ async fn main_impl() -> anyhow::Result<()> {
         0
     };
 
-    global::shutdown_tracer_provider();
+    if let Some((trace_provider, logs_provider)) = tracer_provider_opt {
+        trace_provider
+            .shutdown()
+            .context("failed to shutdown OpenTelemetry tracer provider")?;
+        logs_provider
+            .shutdown()
+            .context("failed to shutdown OpenTelemetry logs provider")?;
+    }
+
     std::process::exit(return_code)
 }
 
@@ -125,7 +138,6 @@ fn about_text() -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
     use std::str::FromStr;
     use std::time::Duration;
 
@@ -675,7 +687,7 @@ mod tests {
                 split_id,
                 target_dir,
                 ..
-            })) if &index_id == "wikipedia" && &split_id == "ABC" && target_dir == PathBuf::from("datadir")
+            })) if &index_id == "wikipedia" && &split_id == "ABC" && target_dir == *"datadir"
         ));
         Ok(())
     }

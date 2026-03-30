@@ -37,9 +37,6 @@ service SearchService {
   /// This methods takes `PartialHit`s and returns `Hit`s.
   rpc FetchDocs(FetchDocsRequest) returns (FetchDocsResponse);
 
-  // Perform a leaf stream on a given set of splits.
-  rpc LeafSearchStream(LeafSearchStreamRequest) returns (stream LeafSearchStreamResponse);
-
   // Root list terms API.
   // This RPC identifies the set of splits on which the query should run on,
   // and dispatches the several calls to `LeafListTerms`.
@@ -128,6 +125,10 @@ message ListFieldsRequest {
   optional int64 start_timestamp = 3;
   optional int64 end_timestamp = 4;
 
+  // JSON-serialized QueryAst for index_filter support.
+  // When provided, only fields from documents matching this query are returned.
+  optional string query_ast = 5;
+
   // Control if the request will fail if split_ids contains a split that does not exist.
   // optional bool fail_on_missing_index = 6;
 }
@@ -144,7 +145,6 @@ message LeafListFieldsRequest {
   // Optional limit query to a list of fields
   // Wildcard expressions are supported.
   repeated string fields = 4;
-
 }
 
 message ListFieldsResponse {
@@ -201,6 +201,9 @@ message SearchRequest {
   // Time filter, expressed in seconds since epoch.
   // That filter is to be interpreted as the semi-open interval:
   // [start_timestamp, end_timestamp).
+  // If the query AST contains a range query over the timestamp field,
+  // then the the bounds of the range query are used directly and
+  // these two fields are ignored.
   optional int64 start_timestamp = 4;
   optional int64 end_timestamp = 5;
 
@@ -243,6 +246,14 @@ message SearchRequest {
   optional PartialHit search_after = 16;
 
   CountHits count_hits = 17;
+
+  // When an exact index ID is provided (not a pattern), the query fails only if
+  // that index is not found and this parameter is set to `false`.
+  bool ignore_missing_indexes = 18;
+
+  // When true, skip finalization of aggregation results and return
+  // the raw IntermediateAggregationResults bytes instead.
+  bool skip_aggregation_finalization = 19;
 }
 
 enum CountHits {
@@ -325,8 +336,7 @@ message SplitSearchError {
   bool retryable_error = 3;
 }
 
-/// A LeafSearchRequest can span multiple indices.
-///
+// A LeafSearchRequest can span multiple indices.
 message LeafSearchRequest {
   // Search request. This is a perfect copy of the original search request
   // that was sent to root apart from the start_offset, max_hits params and index_id_patterns.
@@ -353,7 +363,7 @@ message ResourceStats {
     uint64 cpu_microsecs = 5;
 }
 
-/// LeafRequestRef references data in LeafSearchRequest to deduplicate data.
+// LeafRequestRef references data in LeafSearchRequest to deduplicate data.
 message LeafRequestRef {
   // The ordinal of the doc_mapper in `LeafSearchRequest.doc_mappers`
   uint32 doc_mapper_ord = 1;
@@ -489,6 +499,25 @@ message LeafSearchResponse {
   ResourceStats resource_stats = 8;
 }
 
+// The result of searching a single split in a Lambda invocation.
+// Each result is tagged with its split_id so that ordering is irrelevant.
+message LambdaSingleSplitResult {
+  // The split that was searched.
+  string split_id = 1;
+  oneof outcome {
+    // On success, the leaf search response for this split.
+    LeafSearchResponse response = 2;
+    // On failure, the error message.
+    string error = 3;
+  }
+}
+
+// Wrapper for per-split results from a Lambda invocation.
+message LambdaSearchResponses {
+  reserved 1; // was: repeated LeafSearchResponse responses
+  repeated LambdaSingleSplitResult split_results = 2;
+}
+
 message SnippetRequest {
   repeated string snippet_fields = 1;
   string query_ast_resolved = 2;
@@ -577,74 +606,4 @@ message LeafListTermsResponse {
 
   // Total number of single split search attempted.
   uint64 num_attempted_splits = 4;
-}
-
-// -- Stream -------------------
-
-enum OutputFormat {
-  // Comma Separated Values format (https://datatracker.ietf.org/doc/html/rfc4180).
-  // The delimiter is `,`.
-  CSV = 0; //< This will be the default value
-  // Format data by row in ClickHouse binary format.
-  // https://clickhouse.tech/docs/en/interfaces/formats/#rowbinary
-  CLICK_HOUSE_ROW_BINARY = 1;
-}
-
-message SearchStreamRequest {
-  // Index ID
-  string index_id = 1;
-
-  // deprecated `query`.
-  reserved 2;
-
-  // Quickwit Query AST encoded in Json
-  string query_ast = 11;
-
-  // deprecated `search_fields`
-  reserved 3;
-
-  // The time filter is interpreted as a semi-open interval. [start, end)
-  optional int64 start_timestamp = 4;
-  optional int64 end_timestamp = 5;
-
-  // Name of the fast field to extract
-  string fast_field = 6;
-
-  // The output format
-  OutputFormat output_format = 7;
-
-  reserved 8; // deprecated field: tags
-
-  // The field by which we want to partition
-  optional string partition_by_field = 9;
-
-  // Fields to extract snippet on.
-  repeated string snippet_fields = 10;
-}
-
-message LeafSearchStreamRequest {
-  // Stream request. This is a perfect copy of the original stream request,
-  // that was sent to root.
-  SearchStreamRequest request = 1;
-
-  // Index split ids to apply the query on.
-  // This ids are resolved from the index_uri defined in the stream request.
-  repeated SplitIdAndFooterOffsets split_offsets = 2;
-
-  // `DocMapper` as json serialized trait.
-  string doc_mapper = 5;
-
-  // Index URI. The index URI defines the location of the storage that contains the
-  // split files.
-  string index_uri = 6;
-
-}
-
-
-message LeafSearchStreamResponse {
-  // Row of data serialized in bytes.
-  bytes data = 1;
-
-  // Split id.
-  string split_id = 2;
 }

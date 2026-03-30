@@ -325,7 +325,9 @@ impl From<anyhow::Error> for JaegerError {
 }
 
 fn serialize_bytes_to_hex<S>(bytes: &Vec<u8>, s: S) -> Result<S::Ok, S::Error>
-where S: serde::Serializer {
+where
+    S: serde::Serializer,
+{
     s.serialize_str(&format!("{:0>16}", hex::encode(bytes)))
 }
 

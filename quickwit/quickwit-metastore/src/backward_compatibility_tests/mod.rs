@@ -58,14 +58,18 @@ fn test_global_version<T: Serialize>(serializable: &T) -> anyhow::Result<()> {
 }
 
 fn deserialize_json_file<T>(path: &Path) -> anyhow::Result<T>
-where for<'a> T: Deserialize<'a> {
+where
+    for<'a> T: Deserialize<'a>,
+{
     let payload = std::fs::read(path)?;
     let deserialized: T = serde_json::from_slice(&payload)?;
     Ok(deserialized)
 }
 
 fn test_backward_compatibility_single_case<T>(path: &Path) -> anyhow::Result<()>
-where T: TestableForRegression + std::fmt::Debug {
+where
+    T: TestableForRegression + std::fmt::Debug,
+{
     println!("---\nTest deserialization of {}", path.display());
     let deserialized: T = deserialize_json_file(path)?;
     let expected_path = path.to_string_lossy().replace(".json", ".expected.json");
@@ -79,7 +83,9 @@ where T: TestableForRegression + std::fmt::Debug {
 /// For each pair of `x.json` and `x.expected.json` in `test_dir`, assert that the deserialized
 /// versions are equal according to `T::assert_equality`.
 fn test_backward_compatibility<T>(test_dir: &Path) -> anyhow::Result<()>
-where T: TestableForRegression + std::fmt::Debug {
+where
+    T: TestableForRegression + std::fmt::Debug,
+{
     for entry in
         fs::read_dir(test_dir).with_context(|| format!("failed to read {}", test_dir.display()))?
     {
@@ -97,7 +103,9 @@ where T: TestableForRegression + std::fmt::Debug {
 }
 
 fn test_and_update_expected_files_single_case<T>(expected_path: &Path) -> anyhow::Result<bool>
-where for<'a> T: std::fmt::Debug + Serialize + Deserialize<'a> {
+where
+    for<'a> T: std::fmt::Debug + Serialize + Deserialize<'a>,
+{
     let expected: T = deserialize_json_file(Path::new(&expected_path))?;
     let expected_old_json_value: JsonValue = deserialize_json_file(Path::new(&expected_path))?;
     let expected_new_json_value: JsonValue = serde_json::to_value(&expected)?;
@@ -123,7 +131,9 @@ where for<'a> T: std::fmt::Debug + Serialize + Deserialize<'a> {
 ///
 /// Returns the proposed updated files (xxx.expected.modified.json).
 fn test_and_update_old_expected_files<T>(test_dir: &Path) -> anyhow::Result<Vec<PathBuf>>
-where for<'a> T: std::fmt::Debug + Deserialize<'a> + Serialize {
+where
+    for<'a> T: std::fmt::Debug + Deserialize<'a> + Serialize,
+{
     let mut updated_expected_files = Vec::new();
     for entry in fs::read_dir(test_dir)? {
         let entry = entry?;
@@ -153,7 +163,9 @@ where for<'a> T: std::fmt::Debug + Deserialize<'a> + Serialize {
 ///
 /// Both generated files have identical contents.
 fn test_and_create_new_test<T>(test_dir: &Path, sample: T) -> anyhow::Result<Vec<PathBuf>>
-where for<'a> T: Serialize {
+where
+    for<'a> T: Serialize,
+{
     let sample_json_value = serde_json::to_value(&sample)?;
     let mut sample_json = serde_json::to_string_pretty(&sample_json_value)?;
     sample_json.push('\n');
@@ -198,7 +210,9 @@ where for<'a> T: Serialize {
 ///
 /// - `test_name` is just the subdirectory name, for the type being test.
 pub(crate) fn test_json_backward_compatibility_helper<T>(test_name: &str) -> anyhow::Result<()>
-where T: TestableForRegression + std::fmt::Debug {
+where
+    T: TestableForRegression + std::fmt::Debug,
+{
     let sample_instance: T = T::sample_for_regression();
     test_global_version(&sample_instance).unwrap();
 

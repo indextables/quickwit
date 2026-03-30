@@ -1,0 +1,26 @@
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "includes": ["**", "!build/**"]
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true,
+      "style": "off",
+      "complexity": "off",
+      "correctness": {
+        "useExhaustiveDependencies": "off"
+      },
+      "suspicious": {
+        "noTsIgnore": "off",
+        "useIterableCallbackReturn": "off",
+        "noExplicitAny": "off",
+        "noArrayIndexKey": "off"
+      }
+    },
+    "includes": ["**", "!build/**"]
+  }
+}

@@ -34,7 +34,8 @@ pub struct ServiceStream<T> {
 }
 
 impl<T> ServiceStream<T>
-where T: Send + 'static
+where
+    T: Send + 'static,
 {
     pub fn new(inner: BoxStream<T>) -> Self {
         Self { inner }
@@ -58,7 +59,8 @@ where T: Send + 'static
 }
 
 impl<T> fmt::Debug for ServiceStream<T>
-where T: 'static
+where
+    T: 'static,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "ServiceStream<{:?}>", TypeId::of::<T>())
@@ -68,7 +70,8 @@ where T: 'static
 impl<T> Unpin for ServiceStream<T> {}
 
 impl<T> ServiceStream<T>
-where T: Send + 'static
+where
+    T: Send + 'static,
 {
     pub fn new_bounded(capacity: usize) -> (mpsc::Sender<T>, Self) {
         let (sender, receiver) = mpsc::channel(capacity);
@@ -107,7 +110,8 @@ where T: Send + 'static
 }
 
 impl<T> ServiceStream<T>
-where T: Clone + Send + Sync + 'static
+where
+    T: Clone + Send + Sync + 'static,
 {
     pub fn new_watch(init: T) -> (watch::Sender<T>, Self) {
         let (sender, receiver) = watch::channel(init);
@@ -143,7 +147,8 @@ impl<T> Stream for ServiceStream<T> {
 }
 
 impl<T> From<mpsc::Receiver<T>> for ServiceStream<T>
-where T: Send + 'static
+where
+    T: Send + 'static,
 {
     fn from(receiver: mpsc::Receiver<T>) -> Self {
         Self {
@@ -153,7 +158,8 @@ where T: Send + 'static
 }
 
 impl<T> From<mpsc::UnboundedReceiver<T>> for ServiceStream<T>
-where T: Send + 'static
+where
+    T: Send + 'static,
 {
     fn from(receiver: mpsc::UnboundedReceiver<T>) -> Self {
         Self {
@@ -163,7 +169,8 @@ where T: Send + 'static
 }
 
 impl<T> From<watch::Receiver<T>> for ServiceStream<T>
-where T: Clone + Send + Sync + 'static
+where
+    T: Clone + Send + Sync + 'static,
 {
     fn from(receiver: watch::Receiver<T>) -> Self {
         Self {
@@ -176,7 +183,8 @@ where T: Clone + Send + Sync + 'static
 /// an error is encountered, the stream will be closed and subsequent calls to `poll_next` will
 /// return `None`.
 impl<T> From<tonic::Streaming<T>> for ServiceStream<Result<T, tonic::Status>>
-where T: Send + 'static
+where
+    T: Send + 'static,
 {
     fn from(streaming: tonic::Streaming<T>) -> Self {
         Self {
@@ -188,7 +196,8 @@ where T: Send + 'static
 /// Adapts a client-side tonic::Streaming into a ServiceStream of `T`. Once an error is encountered,
 /// the stream will be closed and subsequent calls to `poll_next` will return `None`.
 impl<T> From<tonic::Streaming<T>> for ServiceStream<T>
-where T: Send + 'static
+where
+    T: Send + 'static,
 {
     fn from(streaming: tonic::Streaming<T>) -> Self {
         let message_stream = stream::unfold(streaming, |mut streaming| {
@@ -211,7 +220,8 @@ where T: Send + 'static
 
 #[cfg(any(test, feature = "testsuite"))]
 impl<T> From<Vec<T>> for ServiceStream<T>
-where T: Send + 'static
+where
+    T: Send + 'static,
 {
     fn from(values: Vec<T>) -> Self {
         Self {
@@ -221,7 +231,8 @@ where T: Send + 'static
 }
 
 impl<T> RpcName for ServiceStream<T>
-where T: RpcName
+where
+    T: RpcName,
 {
     fn rpc_name() -> &'static str {
         T::rpc_name()
@@ -231,7 +242,8 @@ where T: RpcName
 pub struct InFlightValue<T>(T, #[allow(dead_code)] GaugeGuard<'static>);
 
 impl<T> fmt::Debug for InFlightValue<T>
-where T: fmt::Debug
+where
+    T: fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:?}", self.0)

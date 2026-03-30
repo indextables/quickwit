@@ -22,7 +22,7 @@ use tantivy::tokenizer::{
 
 use crate::DEFAULT_REMOVE_TOKEN_LENGTH;
 
-const RAW_TOKENIZER_NAME: &str = "raw";
+pub const RAW_TOKENIZER_NAME: &str = "raw";
 const LOWERCASE_TOKENIZER_NAME: &str = "lowercase";
 const RAW_LOWERCASE_TOKENIZER_NAME: &str = "raw_lowercase";
 
@@ -62,7 +62,9 @@ impl TokenizerManager {
 
     /// Registers a new tokenizer associated with a given name.
     pub fn register<T>(&self, tokenizer_name: &str, tokenizer: T, does_lowercasing: bool)
-    where TextAnalyzer: From<T> {
+    where
+        TextAnalyzer: From<T>,
+    {
         self.inner.register(tokenizer_name, tokenizer);
         self.is_lowercaser
             .write()

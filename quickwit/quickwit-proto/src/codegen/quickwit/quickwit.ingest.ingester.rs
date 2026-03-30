@@ -16,7 +16,7 @@ pub struct RetainShardsRequest {
     pub retain_shards_for_sources: ::prost::alloc::vec::Vec<RetainShardsForSource>,
 }
 #[derive(serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RetainShardsResponse {}
 #[derive(serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -37,8 +37,6 @@ pub struct PersistSubrequest {
     pub index_uid: ::core::option::Option<crate::types::IndexUid>,
     #[prost(string, tag = "3")]
     pub source_id: ::prost::alloc::string::String,
-    #[prost(message, optional, tag = "4")]
-    pub shard_id: ::core::option::Option<crate::types::ShardId>,
     #[prost(message, optional, tag = "5")]
     pub doc_batch: ::core::option::Option<super::DocBatchV2>,
 }
@@ -51,6 +49,28 @@ pub struct PersistResponse {
     pub successes: ::prost::alloc::vec::Vec<PersistSuccess>,
     #[prost(message, repeated, tag = "3")]
     pub failures: ::prost::alloc::vec::Vec<PersistFailure>,
+    #[prost(message, optional, tag = "4")]
+    pub routing_update: ::core::option::Option<RoutingUpdate>,
+}
+#[derive(serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RoutingUpdate {
+    #[prost(uint32, tag = "1")]
+    pub capacity_score: u32,
+    #[prost(message, repeated, tag = "2")]
+    pub source_shard_updates: ::prost::alloc::vec::Vec<SourceShardUpdate>,
+    #[prost(message, repeated, tag = "3")]
+    pub closed_shards: ::prost::alloc::vec::Vec<super::ShardIds>,
+}
+#[derive(serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SourceShardUpdate {
+    #[prost(message, optional, tag = "1")]
+    pub index_uid: ::core::option::Option<crate::types::IndexUid>,
+    #[prost(string, tag = "2")]
+    pub source_id: ::prost::alloc::string::String,
+    #[prost(uint32, tag = "3")]
+    pub open_shard_count: u32,
 }
 #[derive(serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -71,7 +91,7 @@ pub struct PersistSuccess {
     pub parse_failures: ::prost::alloc::vec::Vec<super::ParseFailure>,
 }
 #[derive(serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PersistFailure {
     #[prost(uint32, tag = "1")]
     pub subrequest_id: u32,
@@ -79,8 +99,6 @@ pub struct PersistFailure {
     pub index_uid: ::core::option::Option<crate::types::IndexUid>,
     #[prost(string, tag = "3")]
     pub source_id: ::prost::alloc::string::String,
-    #[prost(message, optional, tag = "4")]
-    pub shard_id: ::core::option::Option<crate::types::ShardId>,
     #[prost(enumeration = "PersistFailureReason", tag = "5")]
     pub reason: i32,
 }
@@ -125,7 +143,7 @@ pub mod ack_replication_message {
     }
 }
 #[derive(serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct OpenReplicationStreamRequest {
     #[prost(string, tag = "1")]
     pub leader_id: ::prost::alloc::string::String,
@@ -136,14 +154,14 @@ pub struct OpenReplicationStreamRequest {
     pub replication_seqno: u64,
 }
 #[derive(serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct OpenReplicationStreamResponse {
     /// Position of the response in the replication stream. It should match the position of the request.
     #[prost(uint64, tag = "1")]
     pub replication_seqno: u64,
 }
 #[derive(serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct InitReplicaRequest {
     #[prost(message, optional, tag = "1")]
     pub replica_shard: ::core::option::Option<super::Shard>,
@@ -151,7 +169,7 @@ pub struct InitReplicaRequest {
     pub replication_seqno: u64,
 }
 #[derive(serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct InitReplicaResponse {
     #[prost(uint64, tag = "1")]
     pub replication_seqno: u64,
@@ -201,7 +219,7 @@ pub struct ReplicateResponse {
     pub replication_seqno: u64,
 }
 #[derive(serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ReplicateSuccess {
     #[prost(uint32, tag = "1")]
     pub subrequest_id: u32,
@@ -215,7 +233,7 @@ pub struct ReplicateSuccess {
     pub replication_position_inclusive: ::core::option::Option<crate::types::Position>,
 }
 #[derive(serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ReplicateFailure {
     #[prost(uint32, tag = "1")]
     pub subrequest_id: u32,
@@ -237,7 +255,7 @@ pub struct TruncateShardsRequest {
     pub subrequests: ::prost::alloc::vec::Vec<TruncateShardsSubrequest>,
 }
 #[derive(serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct TruncateShardsSubrequest {
     #[prost(message, optional, tag = "1")]
     pub index_uid: ::core::option::Option<crate::types::IndexUid>,
@@ -253,10 +271,10 @@ pub struct TruncateShardsSubrequest {
 }
 /// TODO
 #[derive(serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct TruncateShardsResponse {}
 #[derive(serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct OpenFetchStreamRequest {
     #[prost(string, tag = "1")]
     pub client_id: ::prost::alloc::string::String,
@@ -270,7 +288,7 @@ pub struct OpenFetchStreamRequest {
     pub from_position_exclusive: ::core::option::Option<crate::types::Position>,
 }
 #[derive(serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct FetchMessage {
     #[prost(oneof = "fetch_message::Message", tags = "1, 2")]
     pub message: ::core::option::Option<fetch_message::Message>,
@@ -279,7 +297,7 @@ pub struct FetchMessage {
 pub mod fetch_message {
     #[derive(serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
     #[serde(rename_all = "snake_case")]
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum Message {
         #[prost(message, tag = "1")]
         Payload(super::FetchPayload),
@@ -288,7 +306,7 @@ pub mod fetch_message {
     }
 }
 #[derive(serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct FetchPayload {
     #[prost(message, optional, tag = "1")]
     pub index_uid: ::core::option::Option<crate::types::IndexUid>,
@@ -304,7 +322,7 @@ pub struct FetchPayload {
     pub to_position_inclusive: ::core::option::Option<crate::types::Position>,
 }
 #[derive(serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct FetchEof {
     #[prost(message, optional, tag = "1")]
     pub index_uid: ::core::option::Option<crate::types::IndexUid>,
@@ -322,7 +340,7 @@ pub struct InitShardsRequest {
     pub subrequests: ::prost::alloc::vec::Vec<InitShardSubrequest>,
 }
 #[derive(serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct InitShardSubrequest {
     #[prost(uint32, tag = "1")]
     pub subrequest_id: u32,
@@ -342,7 +360,7 @@ pub struct InitShardsResponse {
     pub failures: ::prost::alloc::vec::Vec<InitShardFailure>,
 }
 #[derive(serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct InitShardSuccess {
     #[prost(uint32, tag = "1")]
     pub subrequest_id: u32,
@@ -350,7 +368,7 @@ pub struct InitShardSuccess {
     pub shard: ::core::option::Option<super::Shard>,
 }
 #[derive(serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct InitShardFailure {
     #[prost(uint32, tag = "1")]
     pub subrequest_id: u32,
@@ -375,16 +393,16 @@ pub struct CloseShardsResponse {
     pub successes: ::prost::alloc::vec::Vec<super::ShardPKey>,
 }
 #[derive(serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DecommissionRequest {}
 #[derive(serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DecommissionResponse {}
 #[derive(serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct OpenObservationStreamRequest {}
 #[derive(serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ObservationMessage {
     #[prost(string, tag = "1")]
     pub node_id: ::prost::alloc::string::String,
@@ -397,11 +415,10 @@ pub struct ObservationMessage {
 #[repr(i32)]
 pub enum PersistFailureReason {
     Unspecified = 0,
-    ShardNotFound = 1,
-    ShardClosed = 2,
-    ShardRateLimited = 3,
     WalFull = 4,
     Timeout = 5,
+    NoShardsAvailable = 6,
+    NodeUnavailable = 7,
 }
 impl PersistFailureReason {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -411,22 +428,20 @@ impl PersistFailureReason {
     pub fn as_str_name(&self) -> &'static str {
         match self {
             Self::Unspecified => "PERSIST_FAILURE_REASON_UNSPECIFIED",
-            Self::ShardNotFound => "PERSIST_FAILURE_REASON_SHARD_NOT_FOUND",
-            Self::ShardClosed => "PERSIST_FAILURE_REASON_SHARD_CLOSED",
-            Self::ShardRateLimited => "PERSIST_FAILURE_REASON_SHARD_RATE_LIMITED",
             Self::WalFull => "PERSIST_FAILURE_REASON_WAL_FULL",
             Self::Timeout => "PERSIST_FAILURE_REASON_TIMEOUT",
+            Self::NoShardsAvailable => "PERSIST_FAILURE_REASON_NO_SHARDS_AVAILABLE",
+            Self::NodeUnavailable => "PERSIST_FAILURE_REASON_NODE_UNAVAILABLE",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
     pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
         match value {
             "PERSIST_FAILURE_REASON_UNSPECIFIED" => Some(Self::Unspecified),
-            "PERSIST_FAILURE_REASON_SHARD_NOT_FOUND" => Some(Self::ShardNotFound),
-            "PERSIST_FAILURE_REASON_SHARD_CLOSED" => Some(Self::ShardClosed),
-            "PERSIST_FAILURE_REASON_SHARD_RATE_LIMITED" => Some(Self::ShardRateLimited),
             "PERSIST_FAILURE_REASON_WAL_FULL" => Some(Self::WalFull),
             "PERSIST_FAILURE_REASON_TIMEOUT" => Some(Self::Timeout),
+            "PERSIST_FAILURE_REASON_NO_SHARDS_AVAILABLE" => Some(Self::NoShardsAvailable),
+            "PERSIST_FAILURE_REASON_NODE_UNAVAILABLE" => Some(Self::NodeUnavailable),
             _ => None,
         }
     }
@@ -475,6 +490,8 @@ pub enum IngesterStatus {
     Initializing = 1,
     /// The ingester is ready and accepts read and write requests.
     Ready = 2,
+    /// The ingester is about to be decommissioned. It still accepts read and write requests, but will not accept write requests in a few seconds and should be avoided by future write requests.
+    Retiring = 6,
     /// The ingester is being decommissioned. It accepts read requests but rejects write requests
     /// (open shards, persist, and replicate requests). It will transition to `Decommissioned` once
     /// all shards are fully indexed.
@@ -495,6 +512,7 @@ impl IngesterStatus {
             Self::Unspecified => "INGESTER_STATUS_UNSPECIFIED",
             Self::Initializing => "INGESTER_STATUS_INITIALIZING",
             Self::Ready => "INGESTER_STATUS_READY",
+            Self::Retiring => "INGESTER_STATUS_RETIRING",
             Self::Decommissioning => "INGESTER_STATUS_DECOMMISSIONING",
             Self::Decommissioned => "INGESTER_STATUS_DECOMMISSIONED",
             Self::Failed => "INGESTER_STATUS_FAILED",
@@ -506,6 +524,7 @@ impl IngesterStatus {
             "INGESTER_STATUS_UNSPECIFIED" => Some(Self::Unspecified),
             "INGESTER_STATUS_INITIALIZING" => Some(Self::Initializing),
             "INGESTER_STATUS_READY" => Some(Self::Ready),
+            "INGESTER_STATUS_RETIRING" => Some(Self::Retiring),
             "INGESTER_STATUS_DECOMMISSIONING" => Some(Self::Decommissioning),
             "INGESTER_STATUS_DECOMMISSIONED" => Some(Self::Decommissioned),
             "INGESTER_STATUS_FAILED" => Some(Self::Failed),
@@ -569,49 +588,49 @@ pub type IngesterServiceStream<T> = quickwit_common::ServiceStream<
 #[cfg_attr(any(test, feature = "testsuite"), mockall::automock)]
 #[async_trait::async_trait]
 pub trait IngesterService: std::fmt::Debug + Send + Sync + 'static {
-    /// Persists batches of documents to primary shards hosted on a leader.
+    ///Persists batches of documents to primary shards hosted on a leader.
     async fn persist(
         &self,
         request: PersistRequest,
     ) -> crate::ingest::IngestV2Result<PersistResponse>;
-    /// Opens a replication stream from a leader to a follower.
+    ///Opens a replication stream from a leader to a follower.
     async fn open_replication_stream(
         &self,
         request: quickwit_common::ServiceStream<SynReplicationMessage>,
     ) -> crate::ingest::IngestV2Result<IngesterServiceStream<AckReplicationMessage>>;
-    /// Streams records from a leader or a follower. The client can optionally specify a range of positions to fetch,
-    /// otherwise the stream will go indefinitely or until the shard is closed.
+    ///Streams records from a leader or a follower. The client can optionally specify a range of positions to fetch,
+    ///otherwise the stream will go indefinitely or until the shard is closed.
     async fn open_fetch_stream(
         &self,
         request: OpenFetchStreamRequest,
     ) -> crate::ingest::IngestV2Result<IngesterServiceStream<FetchMessage>>;
-    /// Streams status updates, called "observations", from an ingester.
+    ///Streams status updates, called "observations", from an ingester.
     async fn open_observation_stream(
         &self,
         request: OpenObservationStreamRequest,
     ) -> crate::ingest::IngestV2Result<IngesterServiceStream<ObservationMessage>>;
-    /// Creates and initializes a set of newly opened shards. This RPC is called by the control plane on leaders.
+    ///Creates and initializes a set of newly opened shards. This RPC is called by the control plane on leaders.
     async fn init_shards(
         &self,
         request: InitShardsRequest,
     ) -> crate::ingest::IngestV2Result<InitShardsResponse>;
-    /// Only retain the shards that are listed in the request.
-    /// Other shards are deleted.
+    ///Only retain the shards that are listed in the request.
+    ///Other shards are deleted.
     async fn retain_shards(
         &self,
         request: RetainShardsRequest,
     ) -> crate::ingest::IngestV2Result<RetainShardsResponse>;
-    /// Truncates a set of shards at the given positions. This RPC is called by indexers on leaders AND followers.
+    ///Truncates a set of shards at the given positions. This RPC is called by indexers on leaders AND followers.
     async fn truncate_shards(
         &self,
         request: TruncateShardsRequest,
     ) -> crate::ingest::IngestV2Result<TruncateShardsResponse>;
-    /// Closes a set of shards. This RPC is called by the control plane.
+    ///Closes a set of shards. This RPC is called by the control plane.
     async fn close_shards(
         &self,
         request: CloseShardsRequest,
     ) -> crate::ingest::IngestV2Result<CloseShardsResponse>;
-    /// Decommissions the ingester.
+    ///Decommissions the ingester.
     async fn decommission(
         &self,
         request: DecommissionRequest,
@@ -2403,7 +2422,7 @@ pub mod ingester_service_grpc_client {
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/quickwit.ingest.ingester.IngesterService/Persist",
             );
@@ -2435,7 +2454,7 @@ pub mod ingester_service_grpc_client {
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/quickwit.ingest.ingester.IngesterService/OpenReplicationStream",
             );
@@ -2466,7 +2485,7 @@ pub mod ingester_service_grpc_client {
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/quickwit.ingest.ingester.IngesterService/OpenFetchStream",
             );
@@ -2496,7 +2515,7 @@ pub mod ingester_service_grpc_client {
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/quickwit.ingest.ingester.IngesterService/OpenObservationStream",
             );
@@ -2526,7 +2545,7 @@ pub mod ingester_service_grpc_client {
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/quickwit.ingest.ingester.IngesterService/InitShards",
             );
@@ -2557,7 +2576,7 @@ pub mod ingester_service_grpc_client {
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/quickwit.ingest.ingester.IngesterService/RetainShards",
             );
@@ -2587,7 +2606,7 @@ pub mod ingester_service_grpc_client {
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/quickwit.ingest.ingester.IngesterService/TruncateShards",
             );
@@ -2617,7 +2636,7 @@ pub mod ingester_service_grpc_client {
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/quickwit.ingest.ingester.IngesterService/CloseShards",
             );
@@ -2647,7 +2666,7 @@ pub mod ingester_service_grpc_client {
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/quickwit.ingest.ingester.IngesterService/Decommission",
             );
@@ -2872,7 +2891,7 @@ pub mod ingester_service_grpc_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = PersistSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -2924,7 +2943,7 @@ pub mod ingester_service_grpc_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = OpenReplicationStreamSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -2975,7 +2994,7 @@ pub mod ingester_service_grpc_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = OpenFetchStreamSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -3026,7 +3045,7 @@ pub mod ingester_service_grpc_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = OpenObservationStreamSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -3072,7 +3091,7 @@ pub mod ingester_service_grpc_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = InitShardsSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -3118,7 +3137,7 @@ pub mod ingester_service_grpc_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = RetainShardsSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -3164,7 +3183,7 @@ pub mod ingester_service_grpc_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = TruncateShardsSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -3210,7 +3229,7 @@ pub mod ingester_service_grpc_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = CloseShardsSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -3256,7 +3275,7 @@ pub mod ingester_service_grpc_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = DecommissionSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,

@@ -49,7 +49,8 @@ impl<K, V> Clone for Pool<K, V> {
 }
 
 impl<K, V> Default for Pool<K, V>
-where K: Eq + PartialEq + Hash
+where
+    K: Eq + PartialEq + Hash,
 {
     fn default() -> Self {
         Self {
@@ -106,6 +107,16 @@ where
             .expect("lock should not be poisoned")
             .keys()
             .cloned()
+            .collect()
+    }
+
+    /// Returns all the key-value pairs in the pool.
+    pub fn keys_values(&self) -> Vec<(K, V)> {
+        self.pool
+            .read()
+            .expect("lock should not be poisoned")
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
             .collect()
     }
 
@@ -182,10 +193,13 @@ where
 }
 
 impl<K, V> FromIterator<(K, V)> for Pool<K, V>
-where K: Eq + PartialEq + Hash
+where
+    K: Eq + PartialEq + Hash,
 {
     fn from_iter<I>(iter: I) -> Self
-    where I: IntoIterator<Item = (K, V)> {
+    where
+        I: IntoIterator<Item = (K, V)>,
+    {
         Self {
             pool: Arc::new(RwLock::new(HashMap::from_iter(iter))),
         }

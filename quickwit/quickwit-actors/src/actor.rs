@@ -18,7 +18,6 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use thiserror::Error;
-use tracing::error;
 
 use crate::{ActorContext, QueueCapacity, SendError};
 
@@ -221,7 +220,8 @@ pub trait Handler<M>: Actor {
 
 #[async_trait::async_trait]
 impl<H, M> DeferableReplyHandler<M> for H
-where H: Handler<M>
+where
+    H: Handler<M>,
 {
     type Reply = H::Reply;
 

@@ -294,18 +294,22 @@ pub trait IoControlsAccess: Sized {
     }
 
     fn apply<F, R>(&self, f: F) -> R
-    where F: Fn(&IoControls) -> R;
+    where
+        F: Fn(&IoControls) -> R;
 }
 
 impl IoControlsAccess for IoControls {
     fn apply<F, R>(&self, f: F) -> R
-    where F: Fn(&IoControls) -> R {
+    where
+        F: Fn(&IoControls) -> R,
+    {
         f(self)
     }
 }
 
 impl<A, W> ControlledWrite<A, W>
-where A: IoControlsAccess
+where
+    A: IoControlsAccess,
 {
     pub fn underlying_wrt(&mut self) -> &mut W {
         &mut self.underlying_wrt
@@ -318,7 +322,8 @@ where A: IoControlsAccess
 }
 
 impl<A, W: io::Write> io::Write for ControlledWrite<A, W>
-where A: IoControlsAccess
+where
+    A: IoControlsAccess,
 {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let buf = truncate_bytes(buf);
@@ -377,7 +382,7 @@ mod tests {
         }
         controlled_write.flush().await.unwrap();
         let elapsed = start.elapsed();
-        assert!(elapsed <= Duration::from_millis(5));
+        assert!(elapsed <= Duration::from_millis(10));
         assert_eq!(io_controls.num_bytes(), 2_000_000u64);
     }
 

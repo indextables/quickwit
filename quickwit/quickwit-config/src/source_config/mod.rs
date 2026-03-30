@@ -386,12 +386,12 @@ impl TryFrom<FileSourceParamsForSerde> for FileSourceParams {
                 value.notifications.remove(0),
             ))
         } else if value.notifications.len() > 1 {
-            return Err("Only one notification can be specified for now".into());
+            Err("Only one notification can be specified for now".into())
         } else {
-            return Err(
+            Err(
                 "Either `notifications` or `filepath` must be specified as file source parameters"
                     .into(),
-            );
+            )
         }
     }
 }
@@ -602,7 +602,9 @@ pub enum PulsarSourceAuth {
 
 // Deserializing a string into an pulsar uri.
 fn pulsar_uri<'de, D>(deserializer: D) -> Result<String, D::Error>
-where D: Deserializer<'de> {
+where
+    D: Deserializer<'de>,
+{
     let uri: String = Deserialize::deserialize(deserializer)?;
     let re: Regex = Regex::new(r"pulsar(\+ssl)?://.*").expect("regular expression should compile");
 

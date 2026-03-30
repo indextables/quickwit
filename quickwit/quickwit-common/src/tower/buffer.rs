@@ -34,7 +34,8 @@ pub enum BufferError {
 
 /// A wrapper around [`tower::buffer::Buffer`] service that preserves the original error type.
 pub struct Buffer<S, R>
-where S: Service<R>
+where
+    S: Service<R>,
 {
     bound: usize,
     inner: TowerBuffer<R, <S as Service<R>>::Future>,
@@ -83,7 +84,9 @@ where
 /// Downcasts an error boxed as [`tower::BoxError`] by the buffer service back into the original
 /// error `E`.
 fn downcast_error<E>(error: BoxError) -> E
-where E: error::Error + From<BufferError> + Clone + 'static {
+where
+    E: error::Error + From<BufferError> + Clone + 'static,
+{
     if let Some(error) = error.downcast_ref::<E>() {
         return error.clone();
     }
@@ -92,19 +95,19 @@ where E: error::Error + From<BufferError> + Clone + 'static {
         return BufferError::Closed.into();
     }
     // This happens when the inner service returns an error on `poll_ready`.
-    if let Some(service_error) = error.downcast_ref::<ServiceError>() {
-        if let Some(source) = service_error.source() {
-            if let Some(inner) = source.downcast_ref::<E>() {
-                return inner.clone();
-            }
-        }
+    if let Some(service_error) = error.downcast_ref::<ServiceError>()
+        && let Some(source) = service_error.source()
+        && let Some(inner) = source.downcast_ref::<E>()
+    {
+        return inner.clone();
     }
     // This will happen only if the buffer service implementation adds a new error type.
     BufferError::Unknown.into()
 }
 
 impl<S, R> fmt::Debug for Buffer<S, R>
-where S: Service<R>
+where
+    S: Service<R>,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Buffer")

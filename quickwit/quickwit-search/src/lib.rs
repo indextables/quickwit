@@ -22,8 +22,10 @@ mod cluster_client;
 pub mod collector;
 mod error;
 mod fetch_docs;
-mod filters;
 mod find_trace_ids_collector;
+
+mod invoker;
+/// Leaf search operations.
 pub mod leaf;
 pub mod leaf_cache;
 mod list_fields;
@@ -35,7 +37,6 @@ mod root;
 mod scroll_context;
 mod search_job_placer;
 mod search_response_rest;
-mod search_stream;
 mod service;
 pub(crate) mod top_k_collector;
 
@@ -82,17 +83,20 @@ pub use crate::client::{
 pub use crate::cluster_client::ClusterClient;
 pub use crate::error::{SearchError, parse_grpc_error};
 use crate::fetch_docs::fetch_docs;
+pub use crate::invoker::LambdaLeafSearchInvoker;
+pub use crate::leaf::{
+    CanSplitDoBetter, SplitOverrides, leaf_search_single_split, open_index_with_caches,
+    open_split_bundle, warmup,
+};
 pub use crate::root::{
-    IndexMetasForLeafSearch, SearchJob, check_all_index_metadata_found, jobs_to_leaf_request,
+    IndexMetasForLeafSearch, SearchJob, ensure_all_indexes_found, jobs_to_leaf_request,
     root_search, search_plan,
 };
 pub use crate::search_job_placer::{Job, SearchJobPlacer};
 pub use crate::search_response_rest::{
     AggregationResults, SearchPlanResponseRest, SearchResponseRest,
 };
-pub use crate::search_stream::root_search_stream;
 pub use crate::service::{MockSearchService, SearchService, SearchServiceImpl};
-pub use crate::leaf::{leaf_search_single_split, warmup, CanSplitDoBetter, open_split_bundle, open_index_with_caches, SplitOverrides};
 pub use quickwit_doc_mapper::WarmupInfo;
 
 /// A pool of searcher clients identified by their gRPC socket address.
@@ -229,7 +233,7 @@ pub async fn resolve_index_patterns(
         ListIndexesMetadataRequest::all()
     } else {
         ListIndexesMetadataRequest {
-            index_id_patterns: index_id_patterns.to_owned(),
+            index_id_patterns: index_id_patterns.to_vec(),
         }
     };
 
@@ -239,7 +243,7 @@ pub async fn resolve_index_patterns(
         .await?
         .deserialize_indexes_metadata()
         .await?;
-    check_all_index_metadata_found(&indexes_metadata, index_id_patterns)?;
+    ensure_all_indexes_found(&indexes_metadata, index_id_patterns)?;
     Ok(indexes_metadata)
 }
 
@@ -288,7 +292,7 @@ pub async fn single_node_search(
     let search_job_placer = SearchJobPlacer::new(searcher_pool.clone());
     let cluster_client = ClusterClient::new(search_job_placer);
     let searcher_config = SearcherConfig::default();
-    let searcher_context = Arc::new(SearcherContext::new(searcher_config, None));
+    let searcher_context = Arc::new(SearcherContext::new_without_invoker(searcher_config, None));
     let search_service = Arc::new(SearchServiceImpl::new(
         metastore.clone(),
         storage_resolver,
@@ -311,14 +315,17 @@ pub async fn single_node_search(
 #[cfg(any(test, feature = "testsuite"))]
 #[macro_export]
 macro_rules! encode_term_for_test {
-    ($field:expr, $value:expr) => {
-        ::tantivy::schema::Term::from_field_text(
-            ::tantivy::schema::Field::from_field_id($field),
-            $value,
-        )
-        .serialized_term()
-        .to_vec()
-    };
+    ($field:expr, $value:expr) => {{
+        #[allow(deprecated)]
+        {
+            ::tantivy::schema::Term::from_field_text(
+                ::tantivy::schema::Field::from_field_id($field),
+                $value,
+            )
+            .serialized_term()
+            .to_vec()
+        }
+    }};
     ($value:expr) => {
         encode_term_for_test!(0, $value)
     };

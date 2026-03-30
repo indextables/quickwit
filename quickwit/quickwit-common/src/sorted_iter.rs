@@ -24,7 +24,9 @@ trait Sorted {}
 pub trait SortedIterator: Iterator + Sized {
     /// Compares two sorted iterators and returns the diff.
     fn diff<U>(self, other: U) -> DiffIterator<Self, U>
-    where U: SortedIterator<Item = Self::Item> {
+    where
+        U: SortedIterator<Item = Self::Item>,
+    {
         DiffIterator {
             left: self.peekable(),
             right: other.peekable(),
@@ -110,7 +112,9 @@ impl<K> Sorted for btree_set::Iter<'_, K> {}
 pub trait SortedByKeyIterator<K, V>: Iterator + Sized {
     /// Compares the keys of two sorted key-value iterators and returns the diff.
     fn diff_by_key<U, W>(self, other: U) -> DiffByKeyIterator<Self, U>
-    where U: SortedByKeyIterator<K, W> {
+    where
+        U: SortedByKeyIterator<K, W>,
+    {
         DiffByKeyIterator {
             left: self.peekable(),
             right: other.peekable(),

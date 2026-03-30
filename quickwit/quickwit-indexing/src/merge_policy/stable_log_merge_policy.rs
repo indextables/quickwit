@@ -297,11 +297,6 @@ impl StableLogMergePolicy {
     }
 }
 
-#[cfg(test)]
-fn is_sorted(elements: &[usize]) -> bool {
-    elements.windows(2).all(|w| w[0] <= w[1])
-}
-
 // Helpers which expose some internal properties of
 // the stable log merge policy to be tested in unit tests.
 #[cfg(test)]
@@ -337,7 +332,8 @@ impl StableLogMergePolicy {
         levels: &[usize],
         sorted: bool,
     ) -> usize {
-        assert!(is_sorted(levels));
+        assert!(levels.is_sorted());
+
         if num_docs == 0 {
             return 0;
         }
@@ -440,7 +436,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "All splits are expected to be smaller than `split_num_docs_target`.")]
+    #[should_panic(
+        expected = "All splits are expected to be smaller than `split_num_docs_target`."
+    )]
     fn test_stable_log_merge_policy_build_split_panics_if_exceeding_split_num_docs_target() {
         let merge_policy = StableLogMergePolicy::default();
         let splits = create_splits(&merge_policy, vec![11_000_000]);

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use quickwit_common::tantivy4java_debug;
 use std::collections::HashMap;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -19,7 +20,6 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll};
 use std::{fmt, io};
-use quickwit_common::tantivy4java_debug;
 
 use anyhow::{Context as AnyhhowContext, anyhow};
 use async_trait::async_trait;
@@ -57,7 +57,8 @@ use crate::{
 /// Semaphore to limit the number of concurrent requests to the object store. Some object stores
 /// (R2, SeaweedFs...) return errors when too many concurrent requests are emitted.
 static REQUEST_SEMAPHORE: Lazy<Semaphore> = Lazy::new(|| {
-    let num_permits: usize = quickwit_common::get_from_env("QW_S3_MAX_CONCURRENCY", 10_000usize);
+    let num_permits: usize =
+        quickwit_common::get_from_env("QW_S3_MAX_CONCURRENCY", 10_000usize, false);
     Semaphore::new(num_permits)
 });
 
@@ -134,11 +135,8 @@ fn get_credentials_provider(
     ) {
         (Some(access_key_id), Some(secret_access_key), session_token) => {
             info!("using S3 credentials defined in storage config");
-            let credentials = Credentials::from_keys(
-                access_key_id,
-                secret_access_key,
-                session_token.clone()
-            );
+            let credentials =
+                Credentials::from_keys(access_key_id, secret_access_key, session_token.clone());
             let credentials_provider = SharedCredentialsProvider::new(credentials);
             Some(credentials_provider)
         }
@@ -204,7 +202,8 @@ impl S3CompatibleObjectStorage {
         uri: &Uri,
         credentials_provider: SharedCredentialsProvider,
     ) -> Result<Self, StorageResolverError> {
-        let s3_client = create_s3_client_with_provider(s3_storage_config, Some(credentials_provider)).await;
+        let s3_client =
+            create_s3_client_with_provider(s3_storage_config, Some(credentials_provider)).await;
         Self::from_uri_and_client(s3_storage_config, uri, s3_client).await
     }
 
@@ -219,10 +218,14 @@ impl S3CompatibleObjectStorage {
             StorageResolverError::InvalidUri(message)
         })?;
         // Conditional debug logging
-        tantivy4java_debug!("QUICKWIT DEBUG: S3 storage created from URI: '{}', bucket: '{}', prefix: '{}'", 
-                   uri.as_str(), bucket, prefix.display());
+        tantivy4java_debug!(
+            "QUICKWIT DEBUG: S3 storage created from URI: '{}', bucket: '{}', prefix: '{}'",
+            uri.as_str(),
+            bucket,
+            prefix.display()
+        );
         tantivy4java_debug!("QUICKWIT DEBUG: S3 storage instance created");
-        
+
         // Add stack trace to understand what's calling this
         tantivy4java_debug!("QUICKWIT DEBUG: S3 storage creation stack trace:");
         // let backtrace_str = format!("{}", backtrace);
@@ -314,7 +317,7 @@ async fn compute_md5<T: AsyncRead + std::marker::Unpin>(mut read: T) -> io::Resu
         let read_len = read.read(&mut buf).await?;
         checksum.consume(&buf[..read_len]);
         if read_len == 0 {
-            return Ok(checksum.compute());
+            return Ok(checksum.finalize());
         }
     }
 }
@@ -324,9 +327,16 @@ impl S3CompatibleObjectStorage {
         // FIXME: This may not work on Windows.
         let key_path = self.prefix.join(relative_path);
         let key_str = key_path.to_string_lossy().to_string();
-        tantivy4java_debug!("QUICKWIT DEBUG: key() called with relative_path: '{}', prefix: '{}', result: '{}'", 
-                   relative_path.display(), self.prefix.display(), key_str);
-        tantivy4java_debug!("QUICKWIT DEBUG: key() called on storage instance: {:p}", self);
+        tantivy4java_debug!(
+            "QUICKWIT DEBUG: key() called with relative_path: '{}', prefix: '{}', result: '{}'",
+            relative_path.display(),
+            self.prefix.display(),
+            key_str
+        );
+        tantivy4java_debug!(
+            "QUICKWIT DEBUG: key() called on storage instance: {:p}",
+            self
+        );
         key_str
     }
 
@@ -883,21 +893,37 @@ impl Storage for S3CompatibleObjectStorage {
 
         tantivy4java_debug!("QUICKWIT DEBUG: ===== S3 GET_SLICE REQUEST =====");
         tantivy4java_debug!("QUICKWIT DEBUG: get_slice path: '{}'", path.display());
-        tantivy4java_debug!("QUICKWIT DEBUG: get_slice range: {} to {} ({} bytes)", range.start, range.end, range_size);
+        tantivy4java_debug!(
+            "QUICKWIT DEBUG: get_slice range: {} to {} ({} bytes)",
+            range.start,
+            range.end,
+            range_size
+        );
         tantivy4java_debug!("QUICKWIT DEBUG: get_slice key: '{}'", key);
         tantivy4java_debug!("QUICKWIT DEBUG: get_slice storage instance: {:p}", self);
-        
+
         // Track large vs small requests for hotcache analysis
-        if range_size > 1_000_000 { // > 1MB
-            tantivy4java_debug!("QUICKWIT DEBUG: 🔥 LARGE REQUEST: {} MB - POTENTIAL HOTCACHE MISS!", range_size / 1_000_000);
-        } else if range_size > 100_000 { // > 100KB  
-            tantivy4java_debug!("QUICKWIT DEBUG: ⚠️  MEDIUM REQUEST: {} KB", range_size / 1000);
+        if range_size > 1_000_000 {
+            // > 1MB
+            tantivy4java_debug!(
+                "QUICKWIT DEBUG: 🔥 LARGE REQUEST: {} MB - POTENTIAL HOTCACHE MISS!",
+                range_size / 1_000_000
+            );
+        } else if range_size > 100_000 {
+            // > 100KB
+            tantivy4java_debug!(
+                "QUICKWIT DEBUG: ⚠️  MEDIUM REQUEST: {} KB",
+                range_size / 1000
+            );
         } else {
-            tantivy4java_debug!("QUICKWIT DEBUG: ✅ SMALL REQUEST: {} bytes - LIKELY HOTCACHE", range_size);
+            tantivy4java_debug!(
+                "QUICKWIT DEBUG: ✅ SMALL REQUEST: {} bytes - LIKELY HOTCACHE",
+                range_size
+            );
         }
-        
+
         let result = self.get_to_vec(path, Some(range.clone())).await;
-        
+
         // match &result {
         //     Ok(bytes) => {
         //         tantivy4java_debug!("QUICKWIT DEBUG: [Thread {:?}] get_slice SUCCESS: received {} bytes", thread_id, bytes.len());
@@ -906,18 +932,16 @@ impl Storage for S3CompatibleObjectStorage {
         //         tantivy4java_debug!("QUICKWIT DEBUG: [Thread {:?}] get_slice FAILED: {}", thread_id, err);
         //     }
         // }
-        
-        result
-            .map(OwnedBytes::new)
-            .map_err(|err| {
-                tantivy4java_debug!("QUICKWIT DEBUG: get_slice error occurred: {:?}", err);
-                err.add_context(format!(
-                    "failed to fetch slice {:?} for object: {}/{}",
-                    range,
-                    self.uri,
-                    path.display(),
-                ))
-            })
+
+        result.map(OwnedBytes::new).map_err(|err| {
+            tantivy4java_debug!("QUICKWIT DEBUG: get_slice error occurred: {:?}", err);
+            err.add_context(format!(
+                "failed to fetch slice {:?} for object: {}/{}",
+                range,
+                self.uri,
+                path.display(),
+            ))
+        })
     }
 
     #[instrument(level = "debug", skip(self, range), fields(range.start = range.start, range.end = range.end))]
@@ -946,9 +970,9 @@ impl Storage for S3CompatibleObjectStorage {
         tantivy4java_debug!("QUICKWIT DEBUG: get_all path: '{}'", path.display());
         tantivy4java_debug!("QUICKWIT DEBUG: get_all key: '{}'", key);
         tantivy4java_debug!("QUICKWIT DEBUG: get_all storage instance: {:p}", self);
-        
+
         let result = self.get_to_vec(path, None).await;
-        
+
         // match &result {
         //     Ok(bytes) => {
         //         tantivy4java_debug!("QUICKWIT DEBUG: [Thread {:?}] get_all SUCCESS: received {} bytes", thread_id, bytes.len());
@@ -957,16 +981,14 @@ impl Storage for S3CompatibleObjectStorage {
         //         tantivy4java_debug!("QUICKWIT DEBUG: [Thread {:?}] get_all FAILED: {}", thread_id, err);
         //     }
         // }
-        
-        let bytes = result
-            .map(OwnedBytes::new)
-            .map_err(|err| {
-                err.add_context(format!(
-                    "failed to fetch object: {}/{}",
-                    self.uri,
-                    path.display()
-                ))
-            })?;
+
+        let bytes = result.map(OwnedBytes::new).map_err(|err| {
+            err.add_context(format!(
+                "failed to fetch object: {}/{}",
+                self.uri,
+                path.display()
+            ))
+        })?;
         tracing::Span::current().record("num_bytes_fetched", bytes.len());
         Ok(bytes)
     }
@@ -981,22 +1003,31 @@ impl Storage for S3CompatibleObjectStorage {
         tantivy4java_debug!("QUICKWIT DEBUG:   input path: '{}'", path.display());
         tantivy4java_debug!("QUICKWIT DEBUG:   storage URI: '{}'", self.uri.as_str());
         tantivy4java_debug!("QUICKWIT DEBUG:   storage bucket: '{}'", bucket);
-        tantivy4java_debug!("QUICKWIT DEBUG:   storage prefix: '{}'", self.prefix.display());
+        tantivy4java_debug!(
+            "QUICKWIT DEBUG:   storage prefix: '{}'",
+            self.prefix.display()
+        );
         tantivy4java_debug!("QUICKWIT DEBUG:   computed key: '{}'", key);
         tantivy4java_debug!("QUICKWIT DEBUG:   storage instance: {:p}", self);
-        
+
         // Try to get AWS config details for debugging
-        tantivy4java_debug!("QUICKWIT DEBUG:   AWS credentials: [using environment/default provider]");
-        
+        tantivy4java_debug!(
+            "QUICKWIT DEBUG:   AWS credentials: [using environment/default provider]"
+        );
+
         // if let Some(region) = self.s3_client.config().region() {
         //     tantivy4java_debug!("QUICKWIT DEBUG:   AWS region: '{}'", region.as_ref());
         // } else {
         //     tantivy4java_debug!("QUICKWIT DEBUG:   AWS region: not set");
         // }
-        
+
         tantivy4java_debug!("QUICKWIT DEBUG: =====================================");
         let head_object_output = aws_retry(&self.retry_params, || async {
-            tantivy4java_debug!("QUICKWIT DEBUG: Sending HEAD object request to S3 with bucket='{}' key='{}'", bucket, key);
+            tantivy4java_debug!(
+                "QUICKWIT DEBUG: Sending HEAD object request to S3 with bucket='{}' key='{}'",
+                bucket,
+                key
+            );
             self.s3_client
                 .head_object()
                 .bucket(&bucket)
@@ -1007,12 +1038,19 @@ impl Storage for S3CompatibleObjectStorage {
         .await
         .map_err(|e| {
             tantivy4java_debug!("QUICKWIT DEBUG: HEAD object request FAILED: {:?}", e);
-            tantivy4java_debug!("QUICKWIT DEBUG: Failed request was: bucket='{}' key='{}'", bucket, key);
+            tantivy4java_debug!(
+                "QUICKWIT DEBUG: Failed request was: bucket='{}' key='{}'",
+                bucket,
+                key
+            );
             e
         })?;
 
         let size = head_object_output.content_length().unwrap_or(0) as u64;
-        tantivy4java_debug!("QUICKWIT DEBUG: HEAD object request SUCCEEDED, content_length: {}", size);
+        tantivy4java_debug!(
+            "QUICKWIT DEBUG: HEAD object request SUCCEEDED, content_length: {}",
+            size
+        );
         Ok(size)
     }
 
@@ -1445,10 +1483,17 @@ mod tests {
             ..Default::default()
         };
 
-        let credentials = Credentials::new("custom_key", "custom_secret", Some("custom_token".to_string()), None, "test_provider");
+        let credentials = Credentials::new(
+            "custom_key",
+            "custom_secret",
+            Some("custom_token".to_string()),
+            None,
+            "test_provider",
+        );
         let custom_provider = SharedCredentialsProvider::new(credentials);
 
-        let _s3_client = create_s3_client_with_provider(&s3_storage_config, Some(custom_provider)).await;
+        let _s3_client =
+            create_s3_client_with_provider(&s3_storage_config, Some(custom_provider)).await;
         // Just verify the client can be created without panicking
     }
 
@@ -1477,14 +1522,21 @@ mod tests {
             ..Default::default()
         };
         let uri = Uri::for_test("s3://test-bucket/test-prefix");
-        let credentials = Credentials::new("provider_key", "provider_secret", Some("provider_token".to_string()), None, "test_provider");
+        let credentials = Credentials::new(
+            "provider_key",
+            "provider_secret",
+            Some("provider_token".to_string()),
+            None,
+            "test_provider",
+        );
         let custom_provider = SharedCredentialsProvider::new(credentials);
 
         let storage = S3CompatibleObjectStorage::from_uri_with_credentials_provider(
             &s3_storage_config,
             &uri,
-            custom_provider
-        ).await;
+            custom_provider,
+        )
+        .await;
 
         assert!(storage.is_ok());
         let storage = storage.unwrap();

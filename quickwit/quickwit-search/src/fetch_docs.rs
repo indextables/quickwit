@@ -129,14 +129,14 @@ pub async fn fetch_docs(
     .await?;
 
     let hits: Vec<quickwit_proto::search::LeafHit> = partial_hits
-        .iter()
+        .into_iter()
         .flat_map(|partial_hit| {
-            let global_doc_addr = GlobalDocAddress::from_partial_hit(partial_hit);
+            let global_doc_addr = GlobalDocAddress::from_partial_hit(&partial_hit);
             if let Some((_, document)) = global_doc_addr_to_doc_json.remove_entry(&global_doc_addr)
             {
                 Some(quickwit_proto::search::LeafHit {
                     leaf_json: document.content_json,
-                    partial_hit: Some(partial_hit.clone()),
+                    partial_hit: Some(partial_hit),
                     leaf_snippet_json: document.snippet_json,
                 })
             } else {
@@ -304,7 +304,7 @@ async fn create_fields_snippet_generator(
     let schema = searcher.schema();
     let query_ast_resolved = serde_json::from_str(&snippet_request.query_ast_resolved)
         .context("failed to deserialize QueryAst")?;
-    let (query, _) = doc_mapper.query(schema.clone(), &query_ast_resolved, false)?;
+    let (query, _) = doc_mapper.query(schema.clone(), query_ast_resolved, false, None)?;
     let mut snippet_generators = HashMap::new();
     for field_name in &snippet_request.snippet_fields {
         let field = schema.get_field(field_name)?;

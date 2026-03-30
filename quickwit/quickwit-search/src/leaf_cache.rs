@@ -15,11 +15,13 @@
 use std::ops::{Bound, RangeBounds};
 
 use prost::Message;
+use quickwit_config::CacheConfig;
 use quickwit_proto::search::{
     CountHits, LeafSearchResponse, SearchRequest, SplitIdAndFooterOffsets,
 };
 use quickwit_proto::types::SplitId;
 use quickwit_storage::{MemorySizedCache, OwnedBytes};
+use tantivy::index::SegmentId;
 
 /// A cache to memoize `leaf_search_single_split` results.
 pub struct LeafSearchCache {
@@ -42,10 +44,10 @@ pub struct LeafSearchCache {
 // queries which vary only by search_after.
 
 impl LeafSearchCache {
-    pub fn new(capacity: usize) -> LeafSearchCache {
+    pub fn new(config: &CacheConfig) -> LeafSearchCache {
         LeafSearchCache {
-            content: MemorySizedCache::with_capacity_in_bytes(
-                capacity,
+            content: MemorySizedCache::from_config(
+                config,
                 &quickwit_storage::STORAGE_METRICS.partial_request_cache,
             ),
         }
@@ -68,14 +70,13 @@ impl LeafSearchCache {
         result: LeafSearchResponse,
     ) {
         let key = CacheKey::from_split_meta_and_request(split_info, search_request);
-
         let encoded_result = result.encode_to_vec();
         self.content.put(key, OwnedBytes::new(encoded_result));
     }
 }
 
 /// A key inside a [`LeafSearchCache`].
-#[derive(Debug, Hash, PartialEq, Eq)]
+#[derive(Debug, Hash, Clone, PartialEq, Eq)]
 struct CacheKey {
     /// The split this entry refers to
     split_id: SplitId,
@@ -187,8 +188,54 @@ impl RangeBounds<i64> for HalfOpenRange {
     }
 }
 
+pub struct PredicateCacheImpl {
+    content: MemorySizedCache<(SplitId, String)>,
+}
+
+impl PredicateCacheImpl {
+    pub fn new(config: &CacheConfig) -> Self {
+        PredicateCacheImpl {
+            content: MemorySizedCache::from_config(
+                config,
+                &quickwit_storage::STORAGE_METRICS.predicate_cache,
+            ),
+        }
+    }
+}
+
+impl quickwit_query::query_ast::PredicateCache for PredicateCacheImpl {
+    fn get(
+        &self,
+        split_id: SplitId,
+        query_ast_json: String,
+    ) -> Option<(SegmentId, quickwit_query::query_ast::HitSet)> {
+        let encoded_result = self.content.get(&(split_id, query_ast_json))?;
+        let (segment_id_bytes, hits_buffer) = encoded_result.split(32);
+        let segment_id =
+            SegmentId::from_uuid_string(str::from_utf8(&segment_id_bytes).ok()?).ok()?;
+        let hits = quickwit_query::query_ast::HitSet::from_buffer(hits_buffer);
+        Some((segment_id, hits))
+    }
+
+    fn put(
+        &self,
+        split_id: SplitId,
+        query_ast_json: String,
+        segment: SegmentId,
+        hits: quickwit_query::query_ast::HitSet,
+    ) {
+        let hits_buffer = hits.into_buffer();
+        let mut buffer = Vec::with_capacity(32 + hits_buffer.len());
+        buffer.extend_from_slice(segment.uuid_string().as_bytes());
+        buffer.extend_from_slice(&hits_buffer);
+        self.content
+            .put((split_id, query_ast_json), OwnedBytes::new(buffer));
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use bytesize::ByteSize;
     use quickwit_proto::search::{
         LeafSearchResponse, PartialHit, ResourceStats, SearchRequest, SortValue,
         SplitIdAndFooterOffsets,
@@ -198,7 +245,7 @@ mod tests {
 
     #[test]
     fn test_leaf_search_cache_no_timestamp() {
-        let cache = LeafSearchCache::new(64_000_000);
+        let cache = LeafSearchCache::new(&ByteSize::mb(64).into());
 
         let split_1 = SplitIdAndFooterOffsets {
             split_id: "split_1".to_string(),
@@ -264,7 +311,7 @@ mod tests {
 
     #[test]
     fn test_leaf_search_cache_timestamp() {
-        let cache = LeafSearchCache::new(64_000_000);
+        let cache = LeafSearchCache::new(&ByteSize::mb(64).into());
 
         let split_1 = SplitIdAndFooterOffsets {
             split_id: "split_1".to_string(),

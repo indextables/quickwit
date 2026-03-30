@@ -17,6 +17,7 @@ use std::ops::Bound;
 use std::sync::Arc;
 
 use anyhow::Context;
+use bytesize::ByteSize;
 use futures::future::try_join_all;
 use itertools::{Either, Itertools};
 use quickwit_common::pretty::PrettySample;
@@ -206,6 +207,7 @@ pub fn jobs_to_leaf_requests(
 
 /// Apply a leaf list terms on a single split.
 #[instrument(skip_all, fields(split_id = split.split_id))]
+#[allow(deprecated)]
 async fn leaf_list_terms_single_split(
     searcher_context: &SearcherContext,
     search_request: &ListTermsRequest,
@@ -308,6 +310,7 @@ fn term_from_data(field: Field, field_type: &FieldType, data: &[u8]) -> Term {
     term
 }
 
+#[allow(deprecated)]
 fn term_to_data(field: Field, field_type: &FieldType, field_value: &[u8]) -> Vec<u8> {
     let mut term = Term::from_field_bool(field, false);
     term.clear_with_type(field_type.value_type());
@@ -324,14 +327,20 @@ pub async fn leaf_list_terms(
     splits: &[SplitIdAndFooterOffsets],
 ) -> Result<LeafListTermsResponse, SearchError> {
     info!(split_offsets = ?PrettySample::new(splits, 5));
-    let permit_sizes = splits.iter().map(|split| {
-        compute_initial_memory_allocation(
-            split,
-            searcher_context
-                .searcher_config
-                .warmup_single_split_initial_allocation,
-        )
-    });
+    let permit_sizes: Vec<ByteSize> = splits
+        .iter()
+        .map(|split| {
+            compute_initial_memory_allocation(
+                split,
+                searcher_context
+                    .searcher_config
+                    .warmup_single_split_initial_allocation,
+            )
+        })
+        .collect();
+    // We have added offloading leaf search to lambdas, but not for list_terms yet.
+    // TODO (Add it)
+    // https://github.com/quickwit-oss/quickwit/issues/6150
     let permits = searcher_context
         .search_permit_provider
         .get_permits(permit_sizes)
@@ -345,7 +354,7 @@ pub async fn leaf_list_terms(
             async move {
                 let leaf_split_search_permit = search_permit_recv.await;
                 // TODO dedicated counter and timer?
-                crate::SEARCH_METRICS.leaf_searches_splits_total.inc();
+                crate::SEARCH_METRICS.leaf_list_terms_splits_total.inc();
                 let timer = crate::SEARCH_METRICS
                     .leaf_search_split_duration_secs
                     .start_timer();

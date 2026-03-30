@@ -12,22 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { render, unmountComponentAtNode } from "react-dom";
-import { waitFor } from "@testing-library/react";
-import { screen } from '@testing-library/dom';
-import { act } from "react-dom/test-utils";
+import { render, screen, waitFor } from "@testing-library/react";
+import { act } from "react";
 import { Client } from "../services/client";
 import SearchView from "./SearchView";
 
-jest.mock('../services/client');
+jest.mock("../services/client");
 const mockedUsedNavigate = jest.fn();
-jest.mock('react-router-dom', () => ({
-  ...jest.requireActual('react-router-dom'),
+jest.mock("react-router", () => ({
+  ...jest.requireActual("react-router"),
   useLocation: () => ({
-    pathname: '/search',
-    search: 'index_id=my-new-fresh-index-idmax_hits=10&start_timestamp=1460554590&end_timestamp=1460554592&sort_by_field=-timestamp'
+    pathname: "/search",
+    search:
+      "index_id=my-new-fresh-index-idmax_hits=10&start_timestamp=1460554590&end_timestamp=1460554592&sort_by_field=-timestamp",
   }),
-  useNavigate: () => mockedUsedNavigate
+  useNavigate: () => mockedUsedNavigate,
 }));
 
 let container = null;
@@ -39,42 +38,52 @@ beforeEach(() => {
 
 afterEach(() => {
   // cleanup on exiting
-  unmountComponentAtNode(container);
   container.remove();
   container = null;
 });
 
-test('renders SearchView', async () => {
+test("renders SearchView", async () => {
   const index = {
     metadata: {
       index_config: {
-        index_id: 'my-new-fresh-index-id',
-        index_uri: 'my-new-fresh-index-uri',
+        index_id: "my-new-fresh-index-id",
+        index_uri: "my-new-fresh-index-uri",
         indexing_settings: {},
         doc_mapping: {
-          field_mappings: [{
-            name: 'timestamp',
-            type: 'i64'
-          }]
-        }
-      }
+          field_mappings: [
+            {
+              name: "timestamp",
+              type: "i64",
+            },
+          ],
+        },
+      },
     },
-    splits: []
+    splits: [],
   };
   Client.prototype.getIndex.mockImplementation(() => Promise.resolve(index));
-  Client.prototype.listIndexes.mockImplementation(() => Promise.resolve([index.metadata]));
+  Client.prototype.listIndexes.mockImplementation(() =>
+    Promise.resolve([index.metadata]),
+  );
 
   const searchResponse = {
     num_hits: 2,
-    hits: [{body: 'INFO This is an info log'}, {body: 'WARN This is a warn log'}],
+    hits: [
+      { body: "INFO This is an info log" },
+      { body: "WARN This is a warn log" },
+    ],
     elapsed_time_micros: 10,
-    errors: []
-  }
-  Client.prototype.search.mockImplementation(() => Promise.resolve(searchResponse));
+    errors: [],
+  };
+  Client.prototype.search.mockImplementation(() =>
+    Promise.resolve(searchResponse),
+  );
 
   await act(async () => {
     render(<SearchView />, container);
   });
 
-  await waitFor(() => expect(screen.getByText(/This is an info log/)).toBeInTheDocument());
+  await waitFor(() =>
+    expect(screen.getByText(/This is an info log/)).toBeInTheDocument(),
+  );
 });

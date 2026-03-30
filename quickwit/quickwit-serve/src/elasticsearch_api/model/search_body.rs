@@ -134,11 +134,25 @@ impl<'de> Visitor<'de> for FieldSortVecVisitor {
     type Value = Vec<SortField>;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        formatter.write_str("An array containing the sort fields.")
+        formatter.write_str("A string, array, or object containing the sort fields.")
+    }
+
+    fn visit_str<E>(self, field_name: &str) -> Result<Vec<SortField>, E>
+    where
+        E: serde::de::Error,
+    {
+        let order = default_elasticsearch_sort_order(field_name);
+        Ok(vec![SortField {
+            field: field_name.to_string(),
+            order,
+            date_format: None,
+        }])
     }
 
     fn visit_seq<A>(self, mut seq: A) -> Result<Vec<SortField>, A::Error>
-    where A: serde::de::SeqAccess<'de> {
+    where
+        A: serde::de::SeqAccess<'de>,
+    {
         let mut sort_fields: Vec<SortField> = Vec::new();
         while let Some(field_sort) = seq.next_element::<StringOrMapFieldSort>()? {
             sort_fields.push(field_sort.into());
@@ -147,7 +161,9 @@ impl<'de> Visitor<'de> for FieldSortVecVisitor {
     }
 
     fn visit_map<M>(self, mut map: M) -> Result<Vec<SortField>, M::Error>
-    where M: MapAccess<'de> {
+    where
+        M: MapAccess<'de>,
+    {
         let mut sort_fields: Vec<SortField> = Vec::new();
         while let Some((field_sort_key, field_sort_params)) =
             map.next_entry::<String, FieldSortParams>()?
@@ -168,7 +184,9 @@ impl<'de> Visitor<'de> for FieldSortVecVisitor {
 /// ES accepts structs to describe the sort field.
 /// In that case the order of apparition in the JSON object matters.
 fn deserialize_field_sorts<'de, D>(deserializer: D) -> Result<Option<Vec<SortField>>, D::Error>
-where D: Deserializer<'de> {
+where
+    D: Deserializer<'de>,
+{
     deserializer.deserialize_any(FieldSortVecVisitor).map(Some)
 }
 
@@ -229,6 +247,20 @@ mod tests {
         assert_eq!(field_sorts[0].order, SortOrder::Desc);
         assert_eq!(field_sorts[1].field, "uid");
         assert_eq!(field_sorts[1].order, SortOrder::Asc);
+    }
+
+    #[test]
+    fn test_sort_field_str() {
+        let json = r#"
+        {
+            "sort": "timestamp"
+        }
+        "#;
+        let search_body: SearchBody = serde_json::from_str(json).unwrap();
+        let field_sorts = search_body.sort.unwrap();
+        assert_eq!(field_sorts.len(), 1);
+        assert_eq!(field_sorts[0].field, "timestamp");
+        assert_eq!(field_sorts[0].order, SortOrder::Asc);
     }
 
     #[test]

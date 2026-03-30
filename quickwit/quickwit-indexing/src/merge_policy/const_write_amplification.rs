@@ -175,10 +175,10 @@ impl MergePolicy for ConstWriteAmplificationMergePolicy {
         // We first isolate mature splits. Let's not touch them.
         let (mature_splits, mut young_splits): (Vec<SplitMetadata>, Vec<SplitMetadata>) =
             splits.drain(..).partition(|split: &SplitMetadata| {
-                if let Some(max_finalize_split_num_docs) = self.config.max_finalize_split_num_docs {
-                    if split.num_docs > max_finalize_split_num_docs {
-                        return true;
-                    }
+                if let Some(max_finalize_split_num_docs) = self.config.max_finalize_split_num_docs
+                    && split.num_docs > max_finalize_split_num_docs
+                {
+                    return true;
                 }
                 split.is_mature(now)
             });
@@ -392,7 +392,7 @@ mod tests {
                 ..Default::default()
             })
             .collect();
-        splits.shuffle(&mut rand::thread_rng());
+        splits.shuffle(&mut rand::rng());
         let operations: Vec<MergeOperation> = merge_policy.operations(&mut splits);
         assert_eq!(operations.len(), 1);
         assert_eq!(

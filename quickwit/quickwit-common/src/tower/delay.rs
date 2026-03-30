@@ -29,7 +29,8 @@ pub struct Delay<S> {
 }
 
 impl<S, R> Service<R> for Delay<S>
-where S: Service<R>
+where
+    S: Service<R>,
 {
     type Response = S::Response;
     type Error = S::Error;
@@ -59,7 +60,8 @@ pub struct DelayFuture<F> {
 }
 
 impl<F, T, E> Future for DelayFuture<F>
-where F: Future<Output = Result<T, E>>
+where
+    F: Future<Output = Result<T, E>>,
 {
     type Output = Result<T, E>;
 

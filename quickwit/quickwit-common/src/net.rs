@@ -78,7 +78,9 @@ impl Display for Host {
 
 impl Serialize for Host {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where S: Serializer {
+    where
+        S: Serializer,
+    {
         match self {
             Host::Hostname(hostname) => hostname.serialize(serializer),
             Host::IpAddr(ip_addr) => ip_addr.serialize(serializer),
@@ -88,7 +90,9 @@ impl Serialize for Host {
 
 impl<'de> Deserialize<'de> for Host {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where D: serde::Deserializer<'de> {
+    where
+        D: serde::Deserializer<'de>,
+    {
         let host_str: String = Deserialize::deserialize(deserializer)?;
         host_str.parse().map_err(serde::de::Error::custom)
     }

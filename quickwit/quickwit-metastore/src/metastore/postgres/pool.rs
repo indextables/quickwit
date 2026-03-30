@@ -15,7 +15,6 @@
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use quickwit_common::metrics::GaugeGuard;
-use sqlx::database::HasStatement;
 use sqlx::pool::PoolConnection;
 use sqlx::pool::maybe::MaybePoolConnection;
 use sqlx::{
@@ -71,13 +70,18 @@ impl<'a, DB: Database> Acquire<'a> for &TrackedPool<DB> {
         let acquire_conn_fut = self.acquire();
 
         Box::pin(async move {
-            Transaction::begin(MaybePoolConnection::PoolConnection(acquire_conn_fut.await?)).await
+            Transaction::begin(
+                MaybePoolConnection::PoolConnection(acquire_conn_fut.await?),
+                None,
+            )
+            .await
         })
     }
 }
 
 impl<DB: Database> Executor<'_> for &TrackedPool<DB>
-where for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>
+where
+    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
 {
     type Database = DB;
 
@@ -105,7 +109,7 @@ where for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>
         self,
         sql: &'q str,
         parameters: &'e [<Self::Database as Database>::TypeInfo],
-    ) -> BoxFuture<'e, Result<<Self::Database as HasStatement<'q>>::Statement, Error>> {
+    ) -> BoxFuture<'e, Result<<Self::Database as Database>::Statement<'q>, Error>> {
         self.inner_pool.prepare_with(sql, parameters)
     }
 

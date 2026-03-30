@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex};
 
 use tantivy::directory::OwnedBytes;
 
-use crate::metrics::CacheMetrics;
+use crate::metrics::{CacheMetrics, SingleCacheMetrics};
 
 #[derive(Clone, PartialOrd, Ord, PartialEq, Eq)]
 struct CacheKey<'a, T: ToOwned + ?Sized> {
@@ -58,7 +58,7 @@ struct NeedMutByteRangeCache<T: 'static + ToOwned + ?Sized> {
     // this is hardly significant as items can get merged if they overlap
     num_items: u64,
     num_bytes: u64,
-    cache_counters: &'static CacheMetrics,
+    cache_counters: &'static SingleCacheMetrics,
 }
 
 impl<T: 'static + ToOwned + ?Sized + Ord> NeedMutByteRangeCache<T> {
@@ -67,7 +67,7 @@ impl<T: 'static + ToOwned + ?Sized + Ord> NeedMutByteRangeCache<T> {
             cache: BTreeMap::new(),
             num_items: 0,
             num_bytes: 0,
-            cache_counters,
+            cache_counters: &cache_counters.cache_metrics,
         }
     }
 
@@ -393,7 +393,10 @@ impl ByteRangeCache {
     /// - 1GB+ for heavy workloads with large splits
     pub fn with_capacity(capacity_bytes: u64, cache_counters: &'static CacheMetrics) -> Self {
         use quickwit_common::tantivy4java_debug;
-        tantivy4java_debug!("QUICKWIT DEBUG: 📦 Creating ByteRangeCache with capacity {} MB", capacity_bytes / 1024 / 1024);
+        tantivy4java_debug!(
+            "QUICKWIT DEBUG: 📦 Creating ByteRangeCache with capacity {} MB",
+            capacity_bytes / 1024 / 1024
+        );
         let need_mut_byte_range_cache =
             NeedMutByteRangeCache::with_infinite_capacity(cache_counters);
         let inner = Inner {
@@ -429,30 +432,42 @@ impl ByteRangeCache {
         need_mut_byte_range_cache_locked.clear();
         drop(need_mut_byte_range_cache_locked);
         self.inner_arc.num_stored_bytes.store(0, Ordering::Relaxed);
-        tantivy4java_debug!("QUICKWIT DEBUG: 🧹 CACHE CLEAR: Freed {} bytes from ByteRangeCache (L1)", bytes_before);
+        tantivy4java_debug!(
+            "QUICKWIT DEBUG: 🧹 CACHE CLEAR: Freed {} bytes from ByteRangeCache (L1)",
+            bytes_before
+        );
     }
 
     /// If available, returns the cached view of the slice.
     pub fn get_slice(&self, path: &Path, byte_range: Range<usize>) -> Option<OwnedBytes> {
         let range_size = byte_range.end - byte_range.start;
-        let result = self.inner_arc
+        let result = self
+            .inner_arc
             .need_mut_byte_range_cache
             .lock()
             .unwrap()
             .get_slice(path, byte_range.clone());
-        
+
         // Use tantivy4java_debug! macro for consistent debugging
         use quickwit_common::tantivy4java_debug;
-        
+
         match &result {
             Some(_) => {
-                tantivy4java_debug!("QUICKWIT DEBUG: 🎯 CACHE HIT: {} bytes for path '{}'", range_size, path.display());
-            },
+                tantivy4java_debug!(
+                    "QUICKWIT DEBUG: 🎯 CACHE HIT: {} bytes for path '{}'",
+                    range_size,
+                    path.display()
+                );
+            }
             None => {
-                tantivy4java_debug!("QUICKWIT DEBUG: ❌ CACHE MISS: {} bytes for path '{}' - WILL DOWNLOAD", range_size, path.display());
+                tantivy4java_debug!(
+                    "QUICKWIT DEBUG: ❌ CACHE MISS: {} bytes for path '{}' - WILL DOWNLOAD",
+                    range_size,
+                    path.display()
+                );
             }
         }
-        
+
         result
     }
 
@@ -464,7 +479,11 @@ impl ByteRangeCache {
     pub fn put_slice(&self, path: PathBuf, byte_range: Range<usize>, bytes: OwnedBytes) {
         use quickwit_common::tantivy4java_debug;
         let range_size = byte_range.end - byte_range.start;
-        tantivy4java_debug!("QUICKWIT DEBUG: 💾 CACHE PUT: {} bytes for path '{}'", range_size, path.display());
+        tantivy4java_debug!(
+            "QUICKWIT DEBUG: 💾 CACHE PUT: {} bytes for path '{}'",
+            range_size,
+            path.display()
+        );
 
         // Check capacity constraints
         if let Some(capacity) = self.inner_arc.capacity_bytes {
@@ -473,7 +492,8 @@ impl ByteRangeCache {
             if range_size as u64 > capacity {
                 tantivy4java_debug!(
                     "QUICKWIT DEBUG: ⏭️ CACHE SKIP: {} bytes exceeds cache capacity of {} MB, not storing",
-                    range_size, capacity / 1024 / 1024
+                    range_size,
+                    capacity / 1024 / 1024
                 );
                 return;
             }
@@ -486,7 +506,10 @@ impl ByteRangeCache {
                 // This is a simple but effective policy - data is safe in L2 disk cache
                 tantivy4java_debug!(
                     "QUICKWIT DEBUG: ⚠️ CACHE CAPACITY: {} + {} = {} exceeds {} MB limit, clearing cache",
-                    current_bytes, range_size, new_total, capacity / 1024 / 1024
+                    current_bytes,
+                    range_size,
+                    new_total,
+                    capacity / 1024 / 1024
                 );
                 let mut need_mut_byte_range_cache_locked =
                     self.inner_arc.need_mut_byte_range_cache.lock().unwrap();

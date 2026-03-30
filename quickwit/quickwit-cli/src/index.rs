@@ -39,7 +39,7 @@ use quickwit_serve::{ListSplitsQueryParams, SearchRequestQueryString, SortBy};
 use quickwit_storage::{StorageResolver, load_file};
 use tabled::settings::object::{FirstRow, Rows, Segment};
 use tabled::settings::panel::Footer;
-use tabled::settings::{Alignment, Disable, Format, Modify, Panel, Rotate, Style};
+use tabled::settings::{Alignment, Format, Modify, Panel, Remove, Rotate, Style};
 use tabled::{Table, Tabled};
 use tracing::{Level, debug};
 
@@ -579,7 +579,9 @@ pub async fn list_index_cli(args: ListIndexesArgs) -> anyhow::Result<()> {
 }
 
 fn make_list_indexes_table<I>(indexes: I) -> Table
-where I: IntoIterator<Item = IndexConfig> {
+where
+    I: IntoIterator<Item = IndexConfig>,
+{
     let rows = indexes
         .into_iter()
         .map(|index| IndexRow {
@@ -799,7 +801,7 @@ impl IndexStats {
         Table::builder(tables.into_iter().map(|table| table.to_string()))
             .build()
             .with(Modify::new(Segment::all()).with(Alignment::center_vertical()))
-            .with(Disable::row(FirstRow))
+            .with(Remove::row(FirstRow))
             .with(Style::empty())
             .to_string()
     }
@@ -849,7 +851,7 @@ impl DescriptiveStats {
 
         table
             .with(Style::empty())
-            .with(Disable::row(FirstRow))
+            .with(Remove::row(FirstRow))
             // We separate tables with a newline already, this is to separate quantile part of the
             // table further away from the next table.
             .with(Footer::new("\n"));
@@ -1061,14 +1063,14 @@ pub async fn ingest_docs_cli(args: IngestDocsArgs) -> anyhow::Result<()> {
             // TODO(#5604) remove unwrap
             .unwrap_or(response.num_docs_for_processing),
     );
-    if let Some(rejected) = response.num_rejected_docs {
-        if rejected > 0 {
-            println!(
-                "{} Rejected {} document(s).",
-                "✖".color(RED_COLOR),
-                rejected
-            );
-        }
+    if let Some(rejected) = response.num_rejected_docs
+        && rejected > 0
+    {
+        println!(
+            "{} Rejected {} document(s).",
+            "✖".color(RED_COLOR),
+            rejected
+        );
     }
     if let Some(parse_failures) = response.parse_failures {
         if !parse_failures.is_empty() {
@@ -1266,7 +1268,7 @@ mod test {
         let mut split_4 = template_split;
         split_4.split_metadata = split_metadata_4;
 
-        let splits = vec![split_1, split_2, split_3, split_4];
+        let splits = [split_1, split_2, split_3, split_4];
 
         let splits_num_docs = splits
             .iter()

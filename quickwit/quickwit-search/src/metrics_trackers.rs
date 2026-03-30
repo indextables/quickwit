@@ -86,7 +86,8 @@ impl<F> PinnedDrop for RootSearchMetricsFuture<F> {
 }
 
 impl<F, R, E> Future for RootSearchMetricsFuture<F>
-where F: Future<Output = Result<R, E>>
+where
+    F: Future<Output = Result<R, E>>,
 {
     type Output = Result<R, E>;
 
@@ -103,7 +104,8 @@ where F: Future<Output = Result<R, E>>
 /// Wrapper around the search future to track metrics.
 #[pin_project(PinnedDrop)]
 pub struct LeafSearchMetricsFuture<F>
-where F: Future<Output = Result<LeafSearchResponse, SearchError>>
+where
+    F: Future<Output = Result<LeafSearchResponse, SearchError>>,
 {
     #[pin]
     pub tracked: F,
@@ -114,7 +116,8 @@ where F: Future<Output = Result<LeafSearchResponse, SearchError>>
 
 #[pinned_drop]
 impl<F> PinnedDrop for LeafSearchMetricsFuture<F>
-where F: Future<Output = Result<LeafSearchResponse, SearchError>>
+where
+    F: Future<Output = Result<LeafSearchResponse, SearchError>>,
 {
     fn drop(self: Pin<&mut Self>) {
         let label_values = [self.status.unwrap_or("cancelled")];
@@ -134,7 +137,8 @@ where F: Future<Output = Result<LeafSearchResponse, SearchError>>
 }
 
 impl<F> Future for LeafSearchMetricsFuture<F>
-where F: Future<Output = Result<LeafSearchResponse, SearchError>>
+where
+    F: Future<Output = Result<LeafSearchResponse, SearchError>>,
 {
     type Output = Result<LeafSearchResponse, SearchError>;
 

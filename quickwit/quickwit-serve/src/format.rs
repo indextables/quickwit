@@ -63,7 +63,9 @@ impl fmt::Display for BodyFormat {
 
 impl Serialize for BodyFormat {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where S: Serializer {
+    where
+        S: Serializer,
+    {
         serializer.serialize_str(&self.to_string())
     }
 }
@@ -80,8 +82,7 @@ struct FormatQueryString {
 
 pub(crate) fn extract_format_from_qs()
 -> impl Filter<Extract = (BodyFormat,), Error = Rejection> + Clone {
-    serde_qs::warp::query::<FormatQueryString>(serde_qs::Config::default())
-        .map(|format_qs: FormatQueryString| format_qs.format)
+    warp::query::<FormatQueryString>().map(|format_qs: FormatQueryString| format_qs.format)
 }
 
 #[derive(Debug, Error)]

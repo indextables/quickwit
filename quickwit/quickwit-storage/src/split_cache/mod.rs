@@ -73,10 +73,10 @@ impl SplitCache {
                     // This file is a temporary file that was being downloaded, when Quickwit was
                     // stopped (killed for instance) in a way that prevented
                     // their cleanup. It is important to remove it.
-                    if let Err(io_err) = std::fs::remove_file(&path) {
-                        if io_err.kind() != io::ErrorKind::NotFound {
-                            error!(path=?path, "failed to remove temporary file");
-                        }
+                    if let Err(io_err) = std::fs::remove_file(&path)
+                        && io_err.kind() != io::ErrorKind::NotFound
+                    {
+                        error!(path=?path, "failed to remove temporary file");
                     }
                 }
                 "split" => {
@@ -217,7 +217,7 @@ impl SplitCacheBackingStorage {
     }
 
     fn record_hit_metrics(&self, result_opt: Option<&OwnedBytes>) {
-        let split_metrics = &crate::STORAGE_METRICS.searcher_split_cache;
+        let split_metrics = &crate::STORAGE_METRICS.searcher_split_cache.cache_metrics;
         if let Some(result) = result_opt {
             split_metrics.hits_num_items.inc();
             split_metrics.hits_num_bytes.inc_by(result.len() as u64);

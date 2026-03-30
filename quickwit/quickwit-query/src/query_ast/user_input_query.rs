@@ -20,14 +20,12 @@ use serde::{Deserialize, Serialize};
 use tantivy::query_grammar::{
     Delimiter, Occur, UserInputAst, UserInputBound, UserInputLeaf, UserInputLiteral,
 };
-use tantivy::schema::Schema as TantivySchema;
 
 use crate::not_nan_f32::NotNaNf32;
-use crate::query_ast::tantivy_query_ast::TantivyQueryAst;
 use crate::query_ast::{
-    self, BuildTantivyAst, FieldPresenceQuery, FullTextMode, FullTextParams, QueryAst,
+    self, BuildTantivyAst, BuildTantivyAstContext, FieldPresenceQuery, FullTextMode,
+    FullTextParams, QueryAst, TantivyQueryAst,
 };
-use crate::tokenizers::TokenizerManager;
 use crate::{BooleanOperand, InvalidQuery, JsonLiteral};
 
 const DEFAULT_PHRASE_QUERY_MAX_EXPANSION: u32 = 50;
@@ -88,10 +86,7 @@ impl From<UserInputQuery> for QueryAst {
 impl BuildTantivyAst for UserInputQuery {
     fn build_tantivy_ast_impl(
         &self,
-        _schema: &TantivySchema,
-        _tokenizer_manager: &TokenizerManager,
-        _default_search_fields: &[String],
-        _with_validation: bool,
+        _context: &BuildTantivyAstContext,
     ) -> Result<TantivyQueryAst, crate::InvalidQuery> {
         Err(InvalidQuery::UserQueryNotParsed)
     }
@@ -178,6 +173,22 @@ fn convert_user_input_ast_to_query_ast(
                 Ok(term_set_query.into())
             }
             UserInputLeaf::Exists { field } => Ok(FieldPresenceQuery { field }.into()),
+            UserInputLeaf::Regex { field, pattern } => {
+                let field = if let Some(field) = field {
+                    field
+                } else if default_search_fields.len() == 1 {
+                    default_search_fields[0].clone()
+                } else if default_search_fields.is_empty() {
+                    bail!("regex query without field is not supported");
+                } else {
+                    bail!("regex query with multiple fields is not supported");
+                };
+                let regex_query = query_ast::RegexQuery {
+                    field,
+                    regex: pattern,
+                };
+                Ok(regex_query.into())
+            }
         },
         UserInputAst::Boost(underlying, boost) => {
             let query_ast = convert_user_input_ast_to_query_ast(
@@ -186,7 +197,7 @@ fn convert_user_input_ast_to_query_ast(
                 default_search_fields,
                 lenient,
             )?;
-            let boost: NotNaNf32 = (boost as f32)
+            let boost: NotNaNf32 = (boost.into_inner() as f32)
                 .try_into()
                 .map_err(|err_msg: &str| anyhow::anyhow!(err_msg))?;
             Ok(QueryAst::Boost {
@@ -277,6 +288,7 @@ fn convert_user_input_literal(
                     field: field_name,
                     value: phrase.clone(),
                     lenient,
+                    case_insensitive: false,
                 }
                 .into()
             } else {
@@ -306,9 +318,10 @@ fn convert_user_input_literal(
 #[cfg(test)]
 mod tests {
     use crate::query_ast::{
-        BoolQuery, BuildTantivyAst, FullTextMode, FullTextQuery, QueryAst, UserInputQuery,
+        BoolQuery, BuildTantivyAst, BuildTantivyAstContext, FullTextMode, FullTextQuery, QueryAst,
+        UserInputQuery,
     };
-    use crate::{BooleanOperand, InvalidQuery, create_default_quickwit_tokenizer_manager};
+    use crate::{BooleanOperand, InvalidQuery};
 
     #[test]
     fn test_user_input_query_not_parsed_error() {
@@ -321,23 +334,13 @@ mod tests {
         let schema = tantivy::schema::Schema::builder().build();
         {
             let invalid_query = user_input_query
-                .build_tantivy_ast_call(
-                    &schema,
-                    &create_default_quickwit_tokenizer_manager(),
-                    &[],
-                    true,
-                )
+                .build_tantivy_ast_call(&BuildTantivyAstContext::for_test(&schema))
                 .unwrap_err();
             assert!(matches!(invalid_query, InvalidQuery::UserQueryNotParsed));
         }
         {
             let invalid_query = user_input_query
-                .build_tantivy_ast_call(
-                    &schema,
-                    &create_default_quickwit_tokenizer_manager(),
-                    &[],
-                    false,
-                )
+                .build_tantivy_ast_call(&BuildTantivyAstContext::for_test(&schema))
                 .unwrap_err();
             assert!(matches!(invalid_query, InvalidQuery::UserQueryNotParsed));
         }
@@ -534,5 +537,22 @@ mod tests {
                 FullTextMode::PhraseFallbackToIntersection
             );
         }
+    }
+
+    #[test]
+    fn test_user_input_query_regex() {
+        let ast = UserInputQuery {
+            user_text: "field: /.*/".to_string(),
+            default_fields: None,
+            default_operator: BooleanOperand::And,
+            lenient: false,
+        }
+        .parse_user_query(&[])
+        .unwrap();
+        let QueryAst::Regex(regex_query) = ast else {
+            panic!()
+        };
+        assert_eq!(&regex_query.field, "field");
+        assert_eq!(&regex_query.regex, ".*");
     }
 }

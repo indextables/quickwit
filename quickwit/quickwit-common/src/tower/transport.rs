@@ -46,7 +46,8 @@ struct ChangeStreamAdapter<K> {
 
 // A blanket `Discover` implementation exists for any `Stream<Item = Result<Change<K, V>, E>>`
 impl<K> Stream for ChangeStreamAdapter<K>
-where K: Hash + Eq + Clone
+where
+    K: Hash + Eq + Clone,
 {
     type Item = Result<TowerChange<K, Channel>, Infallible>;
 
@@ -91,7 +92,8 @@ pub struct BalanceChannel<K: Hash + Eq + Clone + Send> {
 }
 
 impl<K> BalanceChannel<K>
-where K: Hash + Eq + Send + Sync + Clone + 'static
+where
+    K: Hash + Eq + Send + Sync + Clone + 'static,
 {
     pub fn new() -> (Self, mpsc::UnboundedSender<Change<K, Channel>>) {
         let (change_tx, change_rx) = mpsc::unbounded_channel();
@@ -105,7 +107,9 @@ where K: Hash + Eq + Send + Sync + Clone + 'static
     }
 
     pub fn from_stream<S>(changes: S) -> Self
-    where S: Stream<Item = Change<K, Channel>> + Send + Unpin + 'static {
+    where
+        S: Stream<Item = Change<K, Channel>> + Send + Unpin + 'static,
+    {
         let (connection_keys_tx, connection_keys_rx) = watch::channel(HashSet::new());
         let change_stream = unlazy_stream(ChangeStreamAdapter::<K> {
             changes: Box::pin(changes),
@@ -168,7 +172,8 @@ where
 }
 
 impl<K> Service<HttpRequest> for BalanceChannel<K>
-where K: Hash + Eq + Clone + Send
+where
+    K: Hash + Eq + Clone + Send,
 {
     type Response = HttpResponse;
     type Error = BoxError;
@@ -184,7 +189,8 @@ where K: Hash + Eq + Clone + Send
 }
 
 impl<K> fmt::Debug for BalanceChannel<K>
-where K: Hash + Eq + Clone + Send + Sync + 'static
+where
+    K: Hash + Eq + Clone + Send + Sync + 'static,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("BalanceChannel")

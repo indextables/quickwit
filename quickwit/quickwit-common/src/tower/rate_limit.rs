@@ -43,7 +43,8 @@ enum State {
 }
 
 impl<S, T> RateLimit<S, T>
-where T: Rate
+where
+    T: Rate,
 {
     /// Creates a new rate limiter.
     pub fn new(inner: S, rate: T) -> Self {
@@ -171,7 +172,8 @@ impl<T> RateLimitLayer<T> {
 }
 
 impl<S, T> Layer<S> for RateLimitLayer<T>
-where T: Rate
+where
+    T: Rate,
 {
     type Service = RateLimit<S, T>;
 

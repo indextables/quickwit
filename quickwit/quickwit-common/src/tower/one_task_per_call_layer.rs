@@ -88,7 +88,8 @@ pub struct UnwrapOrElseFuture<T, E> {
 }
 
 impl<T, E> Future for UnwrapOrElseFuture<T, E>
-where E: From<TaskCancelled>
+where
+    E: From<TaskCancelled>,
 {
     type Output = Result<T, E>;
 

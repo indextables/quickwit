@@ -59,7 +59,9 @@ impl DocMappingUid {
 
 impl<'de> Deserialize<'de> for DocMappingUid {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where D: Deserializer<'de> {
+    where
+        D: Deserializer<'de>,
+    {
         let doc_mapping_uid_str: Cow<'de, str> = Cow::deserialize(deserializer)?;
         doc_mapping_uid_str.parse().map_err(D::Error::custom)
     }
@@ -67,7 +69,9 @@ impl<'de> Deserialize<'de> for DocMappingUid {
 
 impl Serialize for DocMappingUid {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where S: Serializer {
+    where
+        S: Serializer,
+    {
         serializer.collect_str(&self.0)
     }
 }
@@ -151,7 +155,10 @@ impl sqlx::Type<sqlx::Postgres> for DocMappingUid {
 
 #[cfg(feature = "postgres")]
 impl sqlx::Encode<'_, sqlx::Postgres> for DocMappingUid {
-    fn encode_by_ref(&self, buf: &mut sqlx::postgres::PgArgumentBuffer) -> sqlx::encode::IsNull {
+    fn encode_by_ref(
+        &self,
+        buf: &mut sqlx::postgres::PgArgumentBuffer,
+    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
         sqlx::Encode::<sqlx::Postgres>::encode(self.0.to_string(), buf)
     }
 }

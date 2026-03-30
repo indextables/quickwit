@@ -523,7 +523,9 @@ async fn list_sources_cli(args: ListSourcesArgs) -> anyhow::Result<()> {
 }
 
 fn make_list_sources_table<I>(sources: I) -> Table
-where I: IntoIterator<Item = SourceConfig> {
+where
+    I: IntoIterator<Item = SourceConfig>,
+{
     let rows = sources
         .into_iter()
         .map(|source| SourceRow {

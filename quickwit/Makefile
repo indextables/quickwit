@@ -21,6 +21,12 @@ fix:
 	@echo "Running cargo clippy --fix"
 	@cargo clippy --workspace --all-features --tests --fix --allow-dirty --allow-staged
 	@$(MAKE) fmt
+	@$(MAKE) unused-deps
+
+unused-deps:
+	@echo "Checking for unused dependencies"
+	@(command -v cargo-machete >/dev/null || cargo --list | grep -q machete || (echo "cargo-machete is not installed. Please install using 'cargo install cargo-machete'." && exit 1))
+	@cargo machete
 
 # Usage:
 # `make test-all` starts the Docker services and runs all the tests.
@@ -39,14 +45,6 @@ test-all:
 
 test-failpoints:
 	cargo nextest run --test failpoints --features fail/failpoints
-
-test-lambda:
-	AWS_ACCESS_KEY_ID=ignored \
-	AWS_SECRET_ACCESS_KEY=ignored \
-	AWS_REGION=us-east-1 \
-	QW_S3_ENDPOINT=http://localhost:4566 \
-	QW_S3_FORCE_PATH_STYLE_ACCESS=1 \
-	cargo nextest run --all-features -p quickwit-lambda --retries 1
 
 # TODO: to be replaced by https://github.com/quickwit-oss/quickwit/issues/237
 TARGET ?= x86_64-unknown-linux-gnu
@@ -76,3 +74,8 @@ build-ui:
 
 rm-postgres:
 	rm -fr /tmp/quickwit/services/postgres
+
+update-licenses:
+	 dd-rust-license-tool --config license-tool.toml write
+	 mv LICENSE-3rdparty.csv ../LICENSE-3rdparty.csv
+

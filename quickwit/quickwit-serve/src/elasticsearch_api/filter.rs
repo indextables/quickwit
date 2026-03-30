@@ -50,7 +50,7 @@ pub(crate) fn elasticsearch_filter()
 -> impl Filter<Extract = (SearchQueryParams,), Error = Rejection> + Clone {
     warp::path!("_elastic" / "_search")
         .and(warp::get().or(warp::post()).unify())
-        .and(serde_qs::warp::query(serde_qs::Config::default()))
+        .and(warp::query())
 }
 
 #[utoipa::path(
@@ -74,7 +74,7 @@ pub(crate) fn elastic_bulk_filter(
             content_length_limit.as_u64(),
         ))
         .and(get_body_bytes())
-        .and(serde_qs::warp::query(serde_qs::Config::default()))
+        .and(warp::query())
 }
 
 #[utoipa::path(
@@ -98,9 +98,7 @@ pub(crate) fn elastic_index_bulk_filter(
             content_length_limit.as_u64(),
         ))
         .and(get_body_bytes())
-        .and(serde_qs::warp::query::<ElasticBulkOptions>(
-            serde_qs::Config::default(),
-        ))
+        .and(warp::query::<ElasticBulkOptions>())
 }
 
 /// Like the warp json filter, but accepts an empty body and interprets it as `T::default`.
@@ -138,7 +136,7 @@ pub(crate) fn elastic_index_field_capabilities_filter() -> impl Filter<
     warp::path!("_elastic" / String / "_field_caps")
         .and_then(extract_index_id_patterns)
         .and(warp::get().or(warp::post()).unify())
-        .and(serde_qs::warp::query(serde_qs::Config::default()))
+        .and(warp::query())
         .and(json_or_empty())
 }
 
@@ -154,7 +152,7 @@ pub(crate) fn elastic_field_capabilities_filter() -> impl Filter<
     warp::path!("_elastic" / "_field_caps")
         .and_then(extract_index_id_patterns_default)
         .and(warp::get().or(warp::post()).unify())
-        .and(serde_qs::warp::query(serde_qs::Config::default()))
+        .and(warp::query())
         .and(json_or_empty())
 }
 
@@ -173,7 +171,7 @@ pub(crate) fn elastic_index_count_filter()
     warp::path!("_elastic" / String / "_count")
         .and_then(extract_index_id_patterns)
         .and(warp::get().or(warp::post()).unify())
-        .and(serde_qs::warp::query(serde_qs::Config::default()))
+        .and(warp::query())
         .and(json_or_empty())
 }
 
@@ -183,7 +181,7 @@ pub(crate) fn elastic_delete_index_filter()
     warp::path!("_elastic" / String)
         .and(warp::delete())
         .and_then(extract_index_id_patterns)
-        .and(serde_qs::warp::query(serde_qs::Config::default()))
+        .and(warp::query())
 }
 
 // No support for any query parameters for now.
@@ -212,7 +210,7 @@ pub(crate) fn elastic_index_cat_indices_filter()
     warp::path!("_elastic" / "_cat" / "indices" / String)
         .and_then(extract_index_id_patterns)
         .and(warp::get())
-        .and(serde_qs::warp::query(serde_qs::Config::default()))
+        .and(warp::query())
 }
 
 #[utoipa::path(get, tag = "Search", path = "/_cat/indices")]
@@ -220,7 +218,7 @@ pub(crate) fn elastic_cat_indices_filter()
 -> impl Filter<Extract = (CatIndexQueryParams,), Error = Rejection> + Clone {
     warp::path!("_elastic" / "_cat" / "indices")
         .and(warp::get())
-        .and(serde_qs::warp::query(serde_qs::Config::default()))
+        .and(warp::query())
 }
 
 #[utoipa::path(get, tag = "Search", path = "/{index}/_search")]
@@ -229,7 +227,7 @@ pub(crate) fn elastic_index_search_filter()
     warp::path!("_elastic" / String / "_search")
         .and_then(extract_index_id_patterns)
         .and(warp::get().or(warp::post()).unify())
-        .and(serde_qs::warp::query(serde_qs::Config::default()))
+        .and(warp::query())
         .and(json_or_empty())
 }
 
@@ -240,7 +238,7 @@ pub(crate) fn elastic_multi_search_filter()
         .and(warp::body::content_length_limit(BODY_LENGTH_LIMIT.as_u64()))
         .and(warp::body::bytes())
         .and(warp::post())
-        .and(serde_qs::warp::query(serde_qs::Config::default()))
+        .and(warp::query())
 }
 
 fn merge_scroll_body_params(
@@ -253,17 +251,43 @@ fn merge_scroll_body_params(
     }
 }
 
+pub(crate) fn elastic_nodes_filter() -> impl Filter<Extract = (), Error = Rejection> + Clone {
+    warp::path!("_elastic" / "_nodes" / "http").and(warp::get())
+}
+
+pub(crate) fn elastic_search_shards_filter()
+-> impl Filter<Extract = (String,), Error = Rejection> + Clone {
+    warp::path!("_elastic" / String / "_search_shards").and(warp::get())
+}
+
 #[utoipa::path(post, tag = "Search", path = "/_search/scroll")]
 pub(crate) fn elastic_scroll_filter()
 -> impl Filter<Extract = (ScrollQueryParams,), Error = Rejection> + Clone {
     warp::path!("_elastic" / "_search" / "scroll")
         .and(warp::body::content_length_limit(BODY_LENGTH_LIMIT.as_u64()))
         .and(warp::get().or(warp::post()).unify())
-        .and(serde_qs::warp::query(serde_qs::Config::default()))
+        .and(warp::query())
         .and(json_or_empty())
         .map(
             |scroll_query_params: ScrollQueryParams, scroll_body: ScrollQueryParams| {
                 merge_scroll_body_params(scroll_query_params, scroll_body)
             },
         )
+}
+
+pub(crate) fn elastic_delete_scroll_filter() -> impl Filter<Extract = (), Error = Rejection> + Clone
+{
+    warp::path!("_elastic" / "_search" / "scroll").and(warp::delete())
+}
+
+pub(crate) fn elastic_aliases_filter() -> impl Filter<Extract = (), Error = Rejection> + Clone {
+    warp::path!("_elastic" / "_aliases").and(warp::get())
+}
+
+pub(crate) fn elastic_index_mapping_filter()
+-> impl Filter<Extract = (String,), Error = Rejection> + Clone {
+    warp::path!("_elastic" / String / "_mapping")
+        .or(warp::path!("_elastic" / String / "_mappings"))
+        .unify()
+        .and(warp::get())
 }

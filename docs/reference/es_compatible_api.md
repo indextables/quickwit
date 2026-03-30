@@ -365,6 +365,79 @@ Example response:
 
 [HTTP accept header]: https://www.w3.org/Protocols/rfc2616/rfc2616-sec14.html
 
+
+### `_field_caps` &nbsp; Field capabilities API
+
+```
+GET api/v1/_elastic/<index>/_field_caps
+```
+```
+POST api/v1/_elastic/<index>/_field_caps
+```
+```
+GET api/v1/_elastic/_field_caps
+```
+```
+POST api/v1/_elastic/_field_caps
+```
+
+The [field capabilities API](https://www.elastic.co/guide/en/elasticsearch/reference/current/search-field-caps.html) returns information about the capabilities of fields among multiple indices.
+
+#### Supported Query string parameters
+
+| Variable              | Type       | Description                                                                    | Default value |
+| --------------------- | ---------- | ------------------------------------------------------------------------------ | ------------- |
+| `fields`              | `String`   | Comma-separated list of fields to retrieve capabilities for. Supports wildcards (`*`). | (Optional) |
+| `allow_no_indices`    | `Boolean`  | If `true`, missing or closed indices are not an error.                          | (Optional)    |
+| `expand_wildcards`    | `String`   | Controls what kind of indices that wildcard patterns can match.                 | (Optional)    |
+| `ignore_unavailable`  | `Boolean`  | If `true`, unavailable indices are ignored.                                    | (Optional)    |
+| `start_timestamp`     | `Integer`  | *(Quickwit-specific)* If set, restricts splits to documents with a timestamp range start >= `start_timestamp` (seconds since epoch). | (Optional) |
+| `end_timestamp`       | `Integer`  | *(Quickwit-specific)* If set, restricts splits to documents with a timestamp range end < `end_timestamp` (seconds since epoch). | (Optional) |
+
+#### Supported Request Body parameters
+
+| Variable           | Type          | Description                                                                 | Default value |
+| ------------------ | ------------- | --------------------------------------------------------------------------- | ------------- |
+| `index_filter`     | `Json object` | A query to filter indices. If provided, only fields from indices that can potentially match the filter are returned. See [index_filter](#index_filter). | (Optional) |
+| `runtime_mappings`  | `Json object` | Accepted but not supported.                                                 | (Optional)    |
+
+#### `index_filter`
+
+The `index_filter` parameter allows you to filter which indices contribute to the field capabilities response. When provided, Quickwit uses the filter query to prune indices (splits) that cannot match the filter, and only returns field capabilities for the remaining ones.
+
+Like Elasticsearch, this is a **best-effort** approach: Quickwit may return field capabilities from indices that do not actually contain any matching documents. In Quickwit, the filtering is limited to the existing split-pruning based on metadata:
+
+- **Time pruning**: Range queries on the timestamp field can eliminate splits whose time range does not overlap with the filter.
+- **Tag pruning**: Term queries on [tag fields](../configuration/index-config.md#tag-fields) can eliminate splits that do not contain the requested tag value.
+
+Other filter types (e.g. full-text queries or term queries on non-tag fields) are accepted but will not prune any splits — all indices will be returned as if no filter was specified. In particular, Quickwit does not check whether terms are present in the term dictionary.
+
+#### Request Body example
+
+```json
+{
+  "index_filter": {
+    "range": {
+      "timestamp": {
+        "gte": "2024-01-01T00:00:00Z",
+        "lt": "2024-02-01T00:00:00Z"
+      }
+    }
+  }
+}
+```
+
+```json
+{
+  "index_filter": {
+    "term": {
+      "status": "active"
+    }
+  }
+}
+```
+
+
 ## Query DSL
 
 [Elasticsearch Query DSL reference](https://www.elastic.co/guide/en/elasticsearch/reference/8.8/query-dsl.html).
@@ -695,10 +768,11 @@ When working on text, it is recommended to only use `term` queries on fields con
 
 #### Supported Parameters
 
-| Variable | Type     | Description                                                                  | Default |
-| -------- | -------- | ---------------------------------------------------------------------------- | ------- |
-| `value`  | String   | Term value. This is the string representation of a token after tokenization. | -       |
-| `boost`  | `Number` | Multiplier boost for score computation                                       | 1.0     |
+| Variable           | Type    | Description                                                                  | Default |
+| ------------------ | ------- | ---------------------------------------------------------------------------- | ------- |
+| `value`            | String  | Term value. This is the string representation of a token after tokenization. | -       |
+| `boost`            | Number  | Multiplier boost for score computation                                       | 1.0     |
+| `case_insensitive` | Boolean | Allows ASCII case insensitive matching of the value.                         | false   |
 
 
 
@@ -740,6 +814,91 @@ Query matching only documents containing a non-null value for a given field.
 | Variable | Type   | Description                                             | Default |
 | -------- | ------ | ------------------------------------------------------- | ------- |
 | `field`  | String | Only documents with a value for field will be returned. | -       |
+
+### `prefix`
+
+[Elasticsearch reference documentation](https://www.elastic.co/guide/en/elasticsearch/reference/8.8/query-dsl-prefix-query.html)
+
+Returns documents that contain a specific prefix in a provided field.
+
+#### Example
+
+```json
+{
+  "query": {
+    "prefix": {
+      "author.login" {
+        "value": "adm",
+      }
+    }
+  }
+}
+```
+
+#### Supported Parameters
+
+| Variable           | Type    | Description                                          | Default |
+| ------------------ | ------- | ---------------------------------------------------- | ------- |
+| `value`            | String  | Beginning characters of terms you wish to find.      | -       |
+| `case_insensitive` | Boolean | Allows ASCII case insensitive matching of the value. | false   |
+
+### `wildcard`
+
+[Elasticsearch reference documentation](https://www.elastic.co/guide/en/elasticsearch/reference/8.8/query-dsl-wildcard-query.html)
+
+Returns documents that contain terms matching a wildcard pattern:
+* `?` replaces one and only one term character
+* `*` replaces any number of term characters or an empty string
+
+#### Example
+
+```json
+{
+  "query": {
+    "wildcard": {
+      "author.login" {
+        "value": "adm?n*",
+      }
+    }
+  }
+}
+```
+
+#### Supported Parameters
+
+| Variable           | Type    | Description                                          | Default |
+| ------------------ | ------- | ---------------------------------------------------- | ------- |
+| `value`            | String  | Wildcard pattern for terms you wish to find.         | -       |
+| `boost`            | Number  | Multiplier boost for score computation.              | 1.0     |
+| `case_insensitive` | Boolean | Allows ASCII case insensitive matching of the value. | false   |
+
+
+### `regexp`
+
+[Elasticsearch reference documentation](https://www.elastic.co/guide/en/elasticsearch/reference/8.8/query-dsl-regexp-query.html)
+
+Returns documents that contain terms matching a regular expression.
+
+#### Example
+
+```json
+{
+  "query": {
+    "regexp": {
+      "author.login" {
+        "value": "adm.*n",
+      }
+    }
+  }
+}
+```
+
+#### Supported Parameters
+
+| Variable           | Type    | Description                                          | Default |
+| ------------------ | ------- | ---------------------------------------------------- | ------- |
+| `value`            | String  | Wildcard pattern for terms you wish to find.         | -       |
+| `case_insensitive` | Boolean | Allows ASCII case insensitive matching of the value. | false   |
 
 
 ### About the `lenient` argument

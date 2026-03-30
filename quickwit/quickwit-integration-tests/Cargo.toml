@@ -27,6 +27,7 @@ hyper-util = { workspace = true }
 itertools = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
+rustls = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
@@ -39,6 +40,7 @@ quickwit-cli = { workspace = true }
 quickwit-common = { workspace = true, features = ["testsuite"] }
 quickwit-config = { workspace = true, features = ["testsuite"] }
 quickwit-indexing = { workspace = true, features = ["testsuite"] }
+quickwit-ingest = { workspace = true, features = ["testsuite"] }
 quickwit-metastore = { workspace = true, features = ["testsuite"] }
 quickwit-opentelemetry = { workspace = true, features = ["testsuite"] }
 quickwit-proto = { workspace = true, features = ["testsuite"] }

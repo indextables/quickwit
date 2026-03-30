@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::{fmt, io};
 
-use super::s3_compatible_storage::{OBJECT_STORAGE_REQUEST_COUNT, OBJECT_STORAGE_BYTES_FETCHED};
+use super::s3_compatible_storage::{OBJECT_STORAGE_BYTES_FETCHED, OBJECT_STORAGE_REQUEST_COUNT};
 
 use async_trait::async_trait;
 use azure_core::error::ErrorKind;
@@ -115,7 +115,11 @@ impl AzureBlobStorage {
             let blob_endpoint = if endpoint_url.contains(&storage_account_name) {
                 endpoint_url.clone()
             } else {
-                let constructed = format!("{}/{}", endpoint_url.trim_end_matches('/'), storage_account_name);
+                let constructed = format!(
+                    "{}/{}",
+                    endpoint_url.trim_end_matches('/'),
+                    storage_account_name
+                );
                 constructed
             };
 
@@ -245,7 +249,6 @@ impl AzureBlobStorage {
         path: &Path,
         range_opt: Option<Range<usize>>,
     ) -> StorageResult<Vec<u8>> {
-
         let name = self.blob_name(path);
 
         let capacity = range_opt.as_ref().map(Range::len).unwrap_or(0);
@@ -311,7 +314,7 @@ impl AzureBlobStorage {
             chunk_range(0..total_len as usize, part_len as usize).map(into_u64_range);
 
         let blob_client = self.container_client.blob_client(name);
-        let mut upload_blocks_stream_result = tokio_stream::iter(multipart_ranges.enumerate())
+        let upload_blocks_stream = tokio_stream::iter(multipart_ranges.enumerate())
             .map(|(num, range)| {
                 let moved_blob_client = blob_client.clone();
                 let moved_payload = payload.clone();
@@ -321,7 +324,8 @@ impl AzureBlobStorage {
                     .inc_by(range.end - range.start);
                 async move {
                     retry(&self.retry_params, || async {
-                        let block_id = format!("block:{num}");
+                        // zero pad block ids to make them sortable as strings
+                        let block_id = format!("block:{:05}", num);
                         let (data, hash_digest) =
                             extract_range_data_and_hash(moved_payload.box_clone(), range.clone())
                                 .await?;
@@ -338,16 +342,22 @@ impl AzureBlobStorage {
             })
             .buffer_unordered(self.multipart_policy.max_concurrent_uploads());
 
-        // Concurrently upload block with limit.
-        let mut block_list = BlockList::default();
-        while let Some(put_block_result) = upload_blocks_stream_result.next().await {
-            match put_block_result {
-                Ok(block_id) => block_list
-                    .blocks
-                    .push(BlobBlockType::new_uncommitted(block_id)),
-                Err(error) => return Err(error.into()),
-            }
-        }
+        // Collect and sort block ids to preserve part order for put_block_list.
+        // Azure docs: "The put block list operation enforces the order in which blocks
+        // are to be combined to create a blob".
+        // https://docs.microsoft.com/en-us/rest/api/storageservices/put-block-list
+        let mut block_ids: Vec<String> = upload_blocks_stream
+            .try_collect()
+            .await
+            .map_err(StorageError::from)?;
+        block_ids.sort_unstable();
+
+        let block_list = BlockList {
+            blocks: block_ids
+                .into_iter()
+                .map(BlobBlockType::new_uncommitted)
+                .collect(),
+        };
 
         // Commit all uploaded blocks.
         blob_client
@@ -480,19 +490,16 @@ impl Storage for AzureBlobStorage {
 
         let result = self.get_to_vec(path, Some(range.clone())).await;
 
-        let final_result = result
-            .map(OwnedBytes::new)
-            .map_err(|err| {
-                err.add_context(format!(
-                    "failed to fetch slice {:?} for object: {}/{}",
-                    range,
-                    self.uri,
-                    path.display(),
-                ))
-            });
+        let final_result = result.map(OwnedBytes::new).map_err(|err| {
+            err.add_context(format!(
+                "failed to fetch slice {:?} for object: {}/{}",
+                range,
+                self.uri,
+                path.display(),
+            ))
+        });
 
-        if final_result.is_ok() {
-        }
+        if final_result.is_ok() {}
 
         final_result
     }
@@ -608,7 +615,6 @@ async fn download_all(
     chunk_stream: &mut Pageable<GetBlobResponse, AzureError>,
     output: &mut Vec<u8>,
 ) -> Result<(), AzureErrorWrapper> {
-
     output.clear();
 
     let mut chunk_count = 0;
@@ -618,9 +624,7 @@ async fn download_all(
     } {
         chunk_count += 1;
         let chunk_response = match chunk_result {
-            Ok(response) => {
-                response
-            }
+            Ok(response) => response,
             Err(e) => {
                 return Err(e.into());
             }

@@ -93,7 +93,7 @@ impl Directory for ControlledDirectory {
         self.check_if_alive()
             .map_err(|io_err| OpenWriteError::wrap_io_error(io_err, path.to_path_buf()))?;
 
-        let underlying_wrt: Box<dyn TerminatingWrite> = self
+        let underlying_wrt: Box<dyn TerminatingWrite + Send + Sync> = self
             .underlying
             .open_write(path)?
             .into_inner()
@@ -147,14 +147,18 @@ impl HotswappableIoControls {
 
 impl IoControlsAccess for HotswappableIoControls {
     fn apply<F, R>(&self, f: F) -> R
-    where F: Fn(&IoControls) -> R {
+    where
+        F: Fn(&IoControls) -> R,
+    {
         let guard = self.0.load();
         f(&guard)
     }
 }
 
 // Wrapper to work around the orphan rule. (hence the word "Adopted").
-struct AdoptedControlledWrite(ControlledWrite<HotswappableIoControls, Box<dyn TerminatingWrite>>);
+struct AdoptedControlledWrite(
+    ControlledWrite<HotswappableIoControls, Box<dyn TerminatingWrite + Send + Sync>>,
+);
 
 impl io::Write for AdoptedControlledWrite {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {

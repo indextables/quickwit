@@ -534,7 +534,7 @@ impl MergeExecutor {
                     parsed_query_ast
                 );
                 let (query, _) =
-                    doc_mapper.query(union_index.schema(), &parsed_query_ast, false)?;
+                    doc_mapper.query(union_index.schema(), parsed_query_ast, false, None)?;
                 index_writer.delete_query(query)?;
             }
             debug!("commit-delete-operations");
@@ -605,10 +605,11 @@ pub async fn merge_split_directories_standalone(
             let delete_query = delete_task
                 .delete_query
                 .expect("A delete task must have a delete query.");
-            let query_ast: QueryAst = serde_json::from_str(&delete_query.query_ast)
-                .context("invalid query_ast json")?;
+            let query_ast: QueryAst =
+                serde_json::from_str(&delete_query.query_ast).context("invalid query_ast json")?;
             let parsed_query_ast = query_ast.parse_user_query(&[]).context("invalid query")?;
-            let (query, _) = doc_mapper.query(union_index.schema(), &parsed_query_ast, false)?;
+            let (query, _) =
+                doc_mapper.query(union_index.schema(), parsed_query_ast, false, None)?;
             index_writer.delete_query(query)?;
         }
         debug!("commit-delete-operations");
@@ -907,7 +908,8 @@ mod tests {
             let documents_left = searcher
                 .search(
                     &tantivy::query::AllQuery,
-                    &tantivy::collector::TopDocs::with_limit(result_docs.len() + 1),
+                    &tantivy::collector::TopDocs::with_limit(result_docs.len() + 1)
+                        .order_by_score(),
                 )?
                 .into_iter()
                 .map(|(_, doc_address)| {
