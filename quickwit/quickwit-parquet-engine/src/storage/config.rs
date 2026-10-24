@@ -120,7 +120,7 @@ impl ParquetWriterConfig {
     /// Convert to Parquet WriterProperties.
     pub fn to_writer_properties(&self) -> WriterProperties {
         let mut builder = WriterProperties::builder()
-            .set_max_row_group_size(self.row_group_size)
+            .set_max_row_group_row_count(Some(self.row_group_size))
             .set_data_page_size_limit(self.data_page_size)
             .set_write_batch_size(self.write_batch_size)
             // Enable column index for efficient pruning on sorted data (64 bytes default)
@@ -197,7 +197,7 @@ impl ParquetWriterConfig {
             builder = builder
                 .set_column_bloom_filter_enabled(col_path.clone(), true)
                 .set_column_bloom_filter_fpp(col_path.clone(), BLOOM_FILTER_FPP)
-                .set_column_bloom_filter_ndv(col_path, ndv);
+                .set_column_bloom_filter_max_ndv(col_path, ndv);
         }
 
         builder
@@ -247,21 +247,21 @@ mod tests {
         let config = ParquetWriterConfig::default();
         let props = config.to_writer_properties();
         // WriterProperties doesn't expose compression directly, but we can verify it builds
-        assert!(props.max_row_group_size() == 128 * 1024);
+        assert!(props.max_row_group_row_count() == Some(128 * 1024));
     }
 
     #[test]
     fn test_to_writer_properties_snappy() {
         let config = ParquetWriterConfig::new().with_compression(Compression::Snappy);
         let props = config.to_writer_properties();
-        assert!(props.max_row_group_size() == 128 * 1024);
+        assert!(props.max_row_group_row_count() == Some(128 * 1024));
     }
 
     #[test]
     fn test_to_writer_properties_uncompressed() {
         let config = ParquetWriterConfig::new().with_compression(Compression::Uncompressed);
         let props = config.to_writer_properties();
-        assert!(props.max_row_group_size() == 128 * 1024);
+        assert!(props.max_row_group_row_count() == Some(128 * 1024));
     }
 
     #[test]
@@ -279,12 +279,12 @@ mod tests {
 
         let bloom_props = bloom_props.unwrap();
         assert!(
-            (bloom_props.fpp - BLOOM_FILTER_FPP).abs() < 0.001,
+            (bloom_props.fpp() - BLOOM_FILTER_FPP).abs() < 0.001,
             "Bloom filter FPP should be {}",
             BLOOM_FILTER_FPP
         );
         assert_eq!(
-            bloom_props.ndv, BLOOM_FILTER_NDV_METRIC_NAME,
+            bloom_props.ndv(), BLOOM_FILTER_NDV_METRIC_NAME,
             "Bloom filter NDV for metric_name should be {}",
             BLOOM_FILTER_NDV_METRIC_NAME
         );
@@ -299,7 +299,7 @@ mod tests {
 
         let bloom_props = bloom_props.unwrap();
         assert_eq!(
-            bloom_props.ndv, BLOOM_FILTER_NDV_TAGS,
+            bloom_props.ndv(), BLOOM_FILTER_NDV_TAGS,
             "Bloom filter NDV for tag columns should be {}",
             BLOOM_FILTER_NDV_TAGS
         );
