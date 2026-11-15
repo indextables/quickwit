@@ -495,9 +495,14 @@ impl DocMapper {
     /// defined for the `DocMapper`.
     pub fn doc_from_json_obj(
         &self,
-        json_obj: JsonObject,
+        mut json_obj: JsonObject,
         document_len: u64,
     ) -> Result<(Partition, Document), DocParsingError> {
+        // The document is processed in key order at every level, so that the indexed document
+        // (`_source`, the dynamic field, concatenate fields) does not depend on the order
+        // `serde_json::Map` keeps (insertion order with `preserve_order`). Without
+        // `preserve_order` the map is already sorted and this does no work.
+        sort_json_object(&mut json_obj);
         let partition: Partition = self.partition_key.eval_hash(&json_obj);
 
         let mut dynamic_json_obj = serde_json::Map::default();
@@ -626,7 +631,9 @@ impl DocMapper {
                 });
             }
         }
-
+        // The document's members are returned in key order at every level, whatever order
+        // `serde_json::Map` keeps.
+        sort_json_object(&mut doc_json);
         Ok(doc_json)
     }
 
@@ -708,12 +715,21 @@ impl DocMapper {
     }
 }
 
+/// Sorts the members of `json_obj` by key, recursively, so that iterating and serializing it give
+/// the same order whether or not serde_json's `preserve_order` feature is enabled. Without the
+/// feature, `serde_json::Map` is a `BTreeMap` and this does no work.
+pub(crate) fn sort_json_object(json_obj: &mut JsonObject) {
+    json_obj.sort_keys();
+    for value in json_obj.values_mut() {
+        value.sort_all_objects();
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, HashSet};
+    use std::collections::{BTreeMap, HashMap, HashSet};
     use std::iter::zip;
 
-    use itertools::Itertools;
     use quickwit_common::PathHasher;
     use quickwit_query::query_ast::query_ast_from_user_text;
     use serde_json::{self, Value as JsonValue, json};
@@ -795,16 +811,10 @@ mod tests {
             let owned_value: OwnedValue = value.into();
             let field_name = schema.get_field_name(field);
             if field_name == SOURCE_FIELD_NAME {
-                // some part of aws-sdk enables `preserve_order` on serde_json.
-                // to get "normal" equality, we are forced to recreate the json object
-                // with sorted keys.
-                let sorted_json_values = json_doc
-                    .as_object()
-                    .unwrap()
-                    .clone()
-                    .into_iter()
-                    .sorted_by(|k1, k2| k1.0.cmp(&k2.0))
-                    .collect::<serde_json::Map<_, _>>();
+                // The source is indexed with its members in key order at every level,
+                // whatever order `serde_json::Map` keeps.
+                let mut sorted_json_values = json_doc.as_object().unwrap().clone();
+                super::sort_json_object(&mut sorted_json_values);
                 assert_eq!(
                     tantivy::schema::OwnedValue::from(value.as_value()),
                     tantivy::schema::OwnedValue::from(sorted_json_values)
@@ -1943,7 +1953,55 @@ mod tests {
             }"#,
             "concat",
             r#"{"some_text": "this is a text", "other_text": "this is a text too"}"#,
-            vec!["this is a text".into(), "this is a text too".into()],
+            // The document's members are processed in key order: `other_text` first.
+            vec!["this is a text too".into(), "this is a text".into()],
+        );
+    }
+
+    // The indexed document and the document returned do not depend on the order
+    // `serde_json::Map` keeps: these pass with and without serde_json's `preserve_order`.
+    #[test]
+    fn test_doc_from_json_processes_members_in_key_order() {
+        let doc_mapper: DocMapper = serde_json::from_str(r#"{ "mode": "dynamic" }"#).unwrap();
+        let schema = doc_mapper.schema();
+        let (_, doc) = doc_mapper
+            .doc_from_json_str(r#"{"z": 1, "a": {"y": 2, "b": 3}}"#)
+            .unwrap();
+        let dynamic = schema.get_field(DYNAMIC_FIELD_NAME).unwrap();
+        let values: Vec<OwnedValue> = doc.get_all(dynamic).map(|value| value.into()).collect();
+        let OwnedValue::Object(members) = &values[0] else {
+            panic!("the dynamic field holds an object");
+        };
+        let keys: Vec<&str> = members.iter().map(|(key, _)| key.as_str()).collect();
+        assert_eq!(keys, ["a", "z"]);
+        let OwnedValue::Object(inner) = &members[0].1 else {
+            panic!("`a` holds an object");
+        };
+        let inner_keys: Vec<&str> = inner.iter().map(|(key, _)| key.as_str()).collect();
+        assert_eq!(inner_keys, ["b", "y"]);
+    }
+
+    #[test]
+    fn test_doc_to_json_returns_members_in_key_order() {
+        let doc_mapper: DocMapper = serde_json::from_str(r#"{ "mode": "dynamic" }"#).unwrap();
+        let mut named_doc: BTreeMap<String, Vec<TantivyValue>> = BTreeMap::new();
+        named_doc.insert(
+            DYNAMIC_FIELD_NAME.to_string(),
+            vec![TantivyValue::Object(vec![
+                ("z".to_string(), TantivyValue::U64(1)),
+                (
+                    "a".to_string(),
+                    TantivyValue::Object(vec![
+                        ("y".to_string(), TantivyValue::U64(2)),
+                        ("b".to_string(), TantivyValue::U64(3)),
+                    ]),
+                ),
+            ])],
+        );
+        let doc_json = doc_mapper.doc_to_json(named_doc).unwrap();
+        assert_eq!(
+            serde_json::to_string(&doc_json).unwrap(),
+            r#"{"a":{"b":3,"y":2},"z":1}"#
         );
     }
 
