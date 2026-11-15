@@ -813,7 +813,10 @@ impl TryFrom<FieldMappingEntryForSerialization> for FieldMappingEntry {
 /// Serialize object into a `Map` of json values.
 fn serialize_to_map<S: Serialize>(val: &S) -> Option<serde_json::Map<String, JsonValue>> {
     let json_val = serde_json::to_value(val).ok()?;
-    if let JsonValue::Object(map) = json_val {
+    if let JsonValue::Object(mut map) = json_val {
+        // `to_value` keeps the struct's field order when serde_json's `preserve_order` is
+        // enabled; the mapping is serialized in key order either way.
+        map.sort_keys();
         Some(map)
     } else {
         None
@@ -1470,6 +1473,20 @@ mod tests {
         } else {
             panic!("Wrong type");
         }
+    }
+
+    // The mapping's options are serialized in key order, with and without serde_json's
+    // `preserve_order`.
+    #[test]
+    fn test_serialize_mapping_options_in_key_order() {
+        let entry = serde_json::from_str::<FieldMappingEntry>(
+            r#"{"name": "my_field_name", "type": "i64"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_string(&entry).unwrap(),
+            r#"{"name":"my_field_name","type":"i64","coerce":true,"fast":false,"indexed":true,"output_format":"number","stored":true}"#
+        );
     }
 
     #[test]

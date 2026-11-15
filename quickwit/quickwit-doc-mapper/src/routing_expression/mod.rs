@@ -57,7 +57,11 @@ fn hash_json_val<H: Hasher>(json_val: &JsonValue, hasher: &mut H) {
         JsonValue::Object(obj) => {
             hasher.write_u8(5u8);
             hasher.write_u64(obj.len() as u64);
-            for (key, val) in obj.iter() {
+            // Members are hashed in key order, so that the partition does not depend on the
+            // order `serde_json::Map` keeps (insertion order with `preserve_order`).
+            let mut members: Vec<(&String, &JsonValue)> = obj.iter().collect();
+            members.sort_unstable_by(|left, right| left.0.cmp(right.0));
+            for (key, val) in members {
                 hasher.write_u64(key.len() as u64);
                 hasher.write(key.as_bytes());
                 hash_json_val(val, hasher);
@@ -676,6 +680,18 @@ mod tests {
         let ctx: serde_json::Map<String, JsonValue> =
             serde_json::from_str(r#"{"tenant_id": "happy-tenant", "app": "happy"}"#).unwrap();
         assert_eq!(routing_expr.eval_hash(&ctx), 13914409176935416182);
+    }
+
+    // The hash of an object value does not depend on the order `serde_json::Map` keeps: this
+    // passes with and without serde_json's `preserve_order`.
+    #[test]
+    fn test_routing_expr_object_value_hash_ignores_member_order() {
+        let routing_expr = RoutingExpr::new("tenant").unwrap();
+        let ctx: serde_json::Map<String, JsonValue> =
+            serde_json::from_str(r#"{"tenant": {"b": 1, "a": 2}}"#).unwrap();
+        let ctx2: serde_json::Map<String, JsonValue> =
+            serde_json::from_str(r#"{"tenant": {"a": 2, "b": 1}}"#).unwrap();
+        assert_eq!(routing_expr.eval_hash(&ctx), routing_expr.eval_hash(&ctx2));
     }
 
     #[test]
